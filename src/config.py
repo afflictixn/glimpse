@@ -31,9 +31,12 @@ class Settings:
 
     # Ollama / Gemma agent
     ollama_base_url: str = "http://localhost:11434"
-    ollama_model: str = "gemma3:12b"
+    ollama_model: str = "gemma3:1b"
     include_ocr: bool = False
     ollama_timeout_s: int = 30
+    # LLM
+    llm_provider: str = "gemini"
+    llm_model: str = "gemini-2.0-flash"
 
     # General agent
     overlay_ws_url: str = "ws://localhost:9321"

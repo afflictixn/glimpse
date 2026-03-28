@@ -1,5 +1,21 @@
 # Glimpse — Agent Guidelines
 
+## Running the app
+
+Always use `start.sh` to start and stop the app:
+
+```bash
+./start.sh          # starts Ollama, Python backend, Swift overlay
+./start.sh --kill   # stops everything
+```
+
+This launches three processes:
+1. **Ollama** (port 11434) — local LLM server for Gemma 3 12B
+2. **Python backend** (port 3030) — capture loop, OCR, agents, API, general agent
+3. **Swift overlay** — macOS floating panel (Cmd+Shift+O to toggle), WebSocket on port 9321
+
+Logs go to `/tmp/glimpse-backend.log` and `/tmp/glimpse-overlay.log`.
+
 ## What is Glimpse
 
 Glimpse is a macOS-native screen activity capture and intelligence service. It continuously captures screenshots triggered by user input events, runs OCR and vision-LLM analysis, and exposes everything through a FastAPI REST API backed by SQLite with FTS5 full-text search.
@@ -128,30 +144,6 @@ pytest tests/test_health.py -v
 # Only GemmaAgent unit + integration tests
 pytest tests/test_gemma_agent.py -v -s
 ```
-
-## Running the app
-
-**Quick start (all services):**
-
-```bash
-./start.sh          # starts Ollama, Python backend, Swift overlay
-./start.sh --kill   # stops everything
-```
-
-This launches three processes:
-1. **Ollama** (port 11434) — local LLM server for Gemma 3 12B
-2. **Python backend** (port 3030) — capture loop, OCR, agents, API, general agent
-3. **Swift overlay** — macOS floating panel (Cmd+Shift+O to toggle), WebSocket on port 9321
-
-Logs go to `/tmp/glimpse-backend.log` and `/tmp/glimpse-overlay.log`.
-
-**Backend only:**
-
-```bash
-python -m src.main --port 3030 --data-dir ~/.glimpse
-```
-
-Requires macOS with accessibility permissions (for CGEventTap) and optionally a local Ollama instance with `gemma3:12b` pulled.
 
 ## Conventions
 

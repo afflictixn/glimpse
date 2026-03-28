@@ -18,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var overlayState: OverlayState!
     private var chatViewModel: ChatViewModel!
     private var wsServer: WebSocketServer!
+    private var calendarServer: CalendarServer!
 
     private var cancellables = Set<AnyCancellable>()
 
@@ -40,6 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupStatusBar()
         setupGlobalHotkey()
         setupWebSocket()
+        setupCalendarServer()
         bindState()
 
         // Startup demo
@@ -372,8 +374,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         overlayState.dismissSuggestion()
     }
 
+    // MARK: - Calendar Server
+
+    private func setupCalendarServer() {
+        calendarServer = CalendarServer()
+        calendarServer.start()
+    }
+
     @objc private func quitApp() {
         wsServer.stop()
+        calendarServer.stop()
         NSApp.terminate(nil)
     }
 }

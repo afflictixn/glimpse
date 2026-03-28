@@ -7,12 +7,24 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import re
+
 import aiosqlite
 
 from src.config import Settings
 from src.storage.models import Action, AdditionalContext, Event, Frame, OCRResult
 
 logger = logging.getLogger(__name__)
+
+_FTS5_SPECIAL = re.compile(r'[^\w\s]', re.UNICODE)
+
+
+def _sanitize_fts5_query(query: str) -> str:
+    """Escape special characters so raw text is safe for FTS5 MATCH."""
+    tokens = _FTS5_SPECIAL.sub(' ', query).split()
+    if not tokens:
+        return '""'
+    return " ".join(f'"{t}"' for t in tokens)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS frames (
@@ -86,6 +98,24 @@ CREATE VIRTUAL TABLE IF NOT EXISTS context_fts USING fts5(
 CREATE VIRTUAL TABLE IF NOT EXISTS actions_fts USING fts5(
     action_description, action_type, agent_name,
     content='',
+    tokenize='unicode61'
+);
+
+CREATE TABLE IF NOT EXISTS memory (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    entity_type TEXT NOT NULL,
+    entity_name TEXT NOT NULL,
+    fact TEXT NOT NULL,
+    source TEXT,
+    confidence REAL DEFAULT 1.0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    last_seen TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
+    entity_name, fact, entity_type,
+    content='memory',
+    content_rowid='id',
     tokenize='unicode61'
 );
 """
@@ -240,7 +270,7 @@ class DatabaseManager:
             "JOIN frames f ON f.id = o.frame_id "
             "WHERE ocr_fts MATCH ?"
         )
-        params: list = [query]
+        params: list = [_sanitize_fts5_query(query)]
         if start_time:
             sql += " AND f.timestamp >= ?"
             params.append(start_time)
@@ -273,7 +303,7 @@ class DatabaseManager:
                 "JOIN frames f ON f.id = e.frame_id "
                 "WHERE events_fts MATCH ?"
             )
-            params: list = [query]
+            params: list = [_sanitize_fts5_query(query)]
         else:
             sql = (
                 "SELECT e.id as event_id, e.frame_id, e.agent_name, e.app_type, "
@@ -318,7 +348,7 @@ class DatabaseManager:
                 "LEFT JOIN frames f ON f.id = c.frame_id "
                 "WHERE context_fts MATCH ?"
             )
-            params: list = [query]
+            params: list = [_sanitize_fts5_query(query)]
         else:
             sql = (
                 "SELECT c.id as context_id, c.frame_id, c.source, c.content_type, "
@@ -367,7 +397,7 @@ class DatabaseManager:
                 "JOIN frames f ON f.id = a.frame_id "
                 "WHERE actions_fts MATCH ?"
             )
-            params: list = [query]
+            params: list = [_sanitize_fts5_query(query)]
         else:
             sql = (
                 "SELECT a.id as action_id, a.event_id, a.frame_id, a.agent_name, "
@@ -483,9 +513,76 @@ class DatabaseManager:
         rows = await self._conn.execute_fetchall(sql)
         return [dict(r) for r in rows]
 
+    # ── Memory methods ──
+
+    async def insert_memory(
+        self, entity_type: str, entity_name: str, fact: str,
+        source: str | None = None, confidence: float = 1.0,
+    ) -> int:
+        now = datetime.now(timezone.utc).isoformat()
+        async with self._write_lock:
+            cursor = await self._conn.execute(
+                "INSERT INTO memory (entity_type, entity_name, fact, source, "
+                "confidence, created_at, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (entity_type, entity_name, fact, source, confidence, now, now),
+            )
+            row_id = cursor.lastrowid
+            await self._conn.execute(
+                "INSERT INTO memory_fts (rowid, entity_name, fact, entity_type) "
+                "VALUES (?, ?, ?, ?)",
+                (row_id, entity_name, fact, entity_type),
+            )
+            await self._conn.commit()
+            return row_id  # type: ignore[return-value]
+
+    async def search_memory(
+        self, query: str, entity_type: str | None = None, limit: int = 20,
+    ) -> list[dict]:
+        if query:
+            sql = (
+                "SELECT m.id, m.entity_type, m.entity_name, m.fact, m.source, "
+                "m.confidence, m.created_at, m.last_seen "
+                "FROM memory_fts fts "
+                "JOIN memory m ON m.id = fts.rowid "
+                "WHERE memory_fts MATCH ?"
+            )
+            params: list = [query]
+        else:
+            sql = (
+                "SELECT id, entity_type, entity_name, fact, source, "
+                "confidence, created_at, last_seen FROM memory WHERE 1=1"
+            )
+            params = []
+        if entity_type:
+            sql += " AND m.entity_type = ?" if query else " AND entity_type = ?"
+            params.append(entity_type)
+        sql += " ORDER BY last_seen DESC LIMIT ?"
+        params.append(limit)
+        rows = await self._conn.execute_fetchall(sql, params)
+        return [dict(r) for r in rows]
+
+    async def update_memory_last_seen(self, memory_id: int) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        async with self._write_lock:
+            await self._conn.execute(
+                "UPDATE memory SET last_seen = ? WHERE id = ?", (now, memory_id),
+            )
+            await self._conn.commit()
+
+    async def delete_memory(self, memory_id: int) -> bool:
+        async with self._write_lock:
+            await self._conn.execute(
+                "DELETE FROM memory_fts WHERE rowid = ?", (memory_id,),
+            )
+            cursor = await self._conn.execute(
+                "DELETE FROM memory WHERE id = ?", (memory_id,),
+            )
+            await self._conn.commit()
+            return cursor.rowcount > 0
+
     async def get_counts(self) -> dict:
         result = {}
-        for table in ("frames", "ocr_text", "events", "context", "actions"):
+        for table in ("frames", "ocr_text", "events", "context", "actions", "memory"):
             rows = await self._conn.execute_fetchall(f"SELECT COUNT(*) as c FROM {table}")
             result[table] = rows[0][0]
         return result

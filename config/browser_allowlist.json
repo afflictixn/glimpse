@@ -1,0 +1,6 @@
+[
+    {"pattern": "linkedin.com/in/", "selector": "main", "label": "LinkedIn profile"},
+    {"pattern": "linkedin.com/company/", "selector": "main", "label": "LinkedIn company"},
+    {"pattern": "github.com/", "selector": "main", "label": "GitHub"},
+    {"pattern": "amazon.com/", "selector": "#dp-container", "label": "Amazon product"}
+]
