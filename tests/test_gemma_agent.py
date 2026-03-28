@@ -17,7 +17,7 @@ import pytest_asyncio
 from PIL import Image
 
 from src.process.gemma_agent import GemmaAgent
-from src.storage.models import Event
+from src.storage.models import AppType, Event
 
 OLLAMA_URL = "http://localhost:11434"
 MODEL = "gemma3:12b"
@@ -153,10 +153,10 @@ class TestGemmaAgentUnit:
     def test_parse_valid_json(self):
         agent = GemmaAgent()
         event = agent._parse_response(
-            '{"app_type": "editor", "summary": "Editing code", "metadata": {"language": "python"}}'
+            '{"app_type": "ide", "summary": "Editing code", "metadata": {"language": "python"}}'
         )
         assert event is not None
-        assert event.app_type == "editor"
+        assert event.app_type is AppType.IDE
         assert event.summary == "Editing code"
         assert event.metadata == {"language": "python"}
 
@@ -166,14 +166,29 @@ class TestGemmaAgentUnit:
             '```json\n{"app_type": "browser", "summary": "Browsing web"}\n```'
         )
         assert event is not None
-        assert event.app_type == "browser"
+        assert event.app_type is AppType.BROWSER
 
     def test_parse_invalid_json_fallback(self):
         agent = GemmaAgent()
         event = agent._parse_response("I cannot parse this image properly.")
         assert event is not None
-        assert event.app_type == "unknown"
+        assert event.app_type is AppType.OTHER
         assert "cannot parse" in event.summary
+
+    def test_parse_unknown_app_type_coerced_to_other(self):
+        agent = GemmaAgent()
+        event = agent._parse_response(
+            '{"app_type": "spreadsheet", "summary": "Editing cells"}'
+        )
+        assert event is not None
+        assert event.app_type is AppType.OTHER
+
+    def test_coerce_app_type_values(self):
+        assert GemmaAgent._coerce_app_type("browser") is AppType.BROWSER
+        assert GemmaAgent._coerce_app_type("TERMINAL") is AppType.TERMINAL
+        assert GemmaAgent._coerce_app_type("IDE") is AppType.IDE
+        assert GemmaAgent._coerce_app_type("other") is AppType.OTHER
+        assert GemmaAgent._coerce_app_type("chat") is AppType.OTHER
 
     def test_encode_image_returns_base64(self):
         img = Image.new("RGB", (100, 100), (255, 0, 0))

@@ -11,18 +11,19 @@ import urllib.request
 from PIL import Image
 
 from src.process.process_agent import ProcessAgent
-from src.storage.models import Event
+from src.storage.models import AppType, Event
 
 logger = logging.getLogger(__name__)
 
-_SYSTEM_PROMPT = """\
+_APP_TYPES = ", ".join(f'"{v.value}"' for v in AppType)
+
+_SYSTEM_PROMPT = f"""\
 You are a screen activity analyzer. Given a screenshot (and optionally OCR text), \
 produce a JSON object with these fields:
-- "app_type": category of application (e.g. "browser", "editor", "terminal", \
-"chat", "email", "spreadsheet", "unknown")
+- "app_type": one of {_APP_TYPES}
 - "summary": one-sentence description of what the user is doing
-- "metadata": object with any additional observations (e.g. {"url": "...", \
-"language": "python", "topic": "..."})
+- "metadata": object with any additional observations (e.g. {{"url": "...", \
+"language": "python", "topic": "..."}})
 
 Respond ONLY with valid JSON, no markdown fences or extra text."""
 
@@ -109,6 +110,13 @@ class GemmaAgent(ProcessAgent):
 
         return data.get("response", "")
 
+    @staticmethod
+    def _coerce_app_type(raw: str) -> AppType:
+        try:
+            return AppType(raw.lower())
+        except ValueError:
+            return AppType.OTHER
+
     def _parse_response(self, text: str) -> Event | None:
         cleaned = text.strip()
         if cleaned.startswith("```"):
@@ -122,13 +130,13 @@ class GemmaAgent(ProcessAgent):
             logger.warning("Failed to parse Gemma JSON response: %.200s", text)
             return Event(
                 agent_name=self.name,
-                app_type="unknown",
+                app_type=AppType.OTHER,
                 summary=text[:500],
             )
 
         return Event(
             agent_name=self.name,
-            app_type=parsed.get("app_type", "unknown"),
+            app_type=self._coerce_app_type(parsed.get("app_type", "other")),
             summary=parsed.get("summary", ""),
             metadata=parsed.get("metadata", {}),
         )

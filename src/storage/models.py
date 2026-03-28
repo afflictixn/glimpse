@@ -1,6 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import StrEnum
+
+
+class AppType(StrEnum):
+    BROWSER = "browser"
+    TERMINAL = "terminal"
+    IDE = "ide"
+    OTHER = "other"
 
 
 @dataclass
@@ -26,7 +34,7 @@ class OCRResult:
 class Event:
     frame_id: int | None = None
     agent_name: str = ""
-    app_type: str = ""
+    app_type: AppType = AppType.OTHER
     summary: str = ""
     metadata: dict = field(default_factory=dict)
     id: int | None = None

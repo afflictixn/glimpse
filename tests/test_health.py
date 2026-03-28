@@ -20,7 +20,7 @@ from src.intelligence.intelligence_layer import IntelligenceLayer
 from src.intelligence.reasoning_agent import ReasoningAgent
 from src.process.process_agent import NoOpAgent
 from src.storage.database import DatabaseManager
-from src.storage.models import Action, AdditionalContext, Event, Frame, OCRResult
+from src.storage.models import Action, AdditionalContext, AppType, Event, Frame, OCRResult
 
 
 # ── Models ──
@@ -81,7 +81,7 @@ class TestDatabase:
         fid = await db.insert_frame(Frame(
             timestamp="2025-01-01T00:00:00Z", capture_trigger="manual",
         ))
-        evt = Event(agent_name="classifier", app_type="browser",
+        evt = Event(agent_name="classifier", app_type=AppType.BROWSER,
                     summary="User opened docs", metadata={"url": "https://docs.python.org"})
         eid = await db.insert_event(fid, evt)
         assert eid >= 1
@@ -115,7 +115,7 @@ class TestDatabase:
             timestamp="2025-01-01T00:00:00Z", capture_trigger="manual",
         ))
         eid = await db.insert_event(fid, Event(
-            agent_name="a", app_type="ide", summary="coding session",
+            agent_name="a", app_type=AppType.IDE, summary="coding session",
         ))
         act = Action(
             event_id=eid, frame_id=fid, agent_name="reasoner",
@@ -260,7 +260,7 @@ class TestIntelligenceLayer:
             timestamp="2025-01-01T00:00:00Z", capture_trigger="manual",
         ))
         eid = await db.insert_event(fid, Event(
-            agent_name="a", app_type="ide", summary="test",
+            agent_name="a", app_type=AppType.IDE, summary="test",
         ))
         action = Action(
             event_id=eid, frame_id=fid, agent_name="stub",
@@ -270,7 +270,7 @@ class TestIntelligenceLayer:
         task = asyncio.create_task(layer.run())
 
         evt = Event(id=eid, frame_id=fid, agent_name="a",
-                    app_type="ide", summary="test")
+                    app_type=AppType.IDE, summary="test")
         await layer.submit(evt)
         await asyncio.sleep(0.3)
         await layer.stop()
@@ -289,13 +289,13 @@ class TestIntelligenceLayer:
             timestamp="2025-01-01T00:00:00Z", capture_trigger="manual",
         ))
         eid = await db.insert_event(fid, Event(
-            agent_name="a", app_type="ide", summary="test",
+            agent_name="a", app_type=AppType.IDE, summary="test",
         ))
         layer = IntelligenceLayer(agents=[FailingReasoningAgent()], db=db)
         task = asyncio.create_task(layer.run())
 
         await layer.submit(Event(id=eid, frame_id=fid, agent_name="a",
-                                 app_type="ide", summary="test"))
+                                 app_type=AppType.IDE, summary="test"))
         await asyncio.sleep(0.3)
         await layer.stop()
         task.cancel()
@@ -318,10 +318,11 @@ class TestAPI:
         ))
         await db.insert_ocr(fid, OCRResult(
             text="pull request review comments",
+            
             text_json="[]", confidence=0.95,
         ))
         eid = await db.insert_event(fid, Event(
-            agent_name="classifier", app_type="browser",
+            agent_name="classifier", app_type=AppType.BROWSER,
             summary="Code review session", metadata={"repo": "glimpse"},
         ))
         await db.insert_context(fid, AdditionalContext(
