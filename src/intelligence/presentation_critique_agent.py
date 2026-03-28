@@ -5,6 +5,7 @@ import asyncio
 import io
 import json
 import logging
+import time
 from pathlib import Path
 
 from google import genai
@@ -47,10 +48,13 @@ class PresentationCritiqueAgent(ReasoningAgent):
         model: str = "gemini-2.0-flash",
         max_image_width: int = 1280,
         api_key: str | None = None,
+        backoff_seconds: float = 30.0,
     ) -> None:
         self._model = model
         self._max_width = max_image_width
         self._client = genai.Client(api_key=api_key)
+        self._backoff_seconds = backoff_seconds
+        self._last_process_time: float = 0.0
 
     @property
     def name(self) -> str:
@@ -62,6 +66,11 @@ class PresentationCritiqueAgent(ReasoningAgent):
 
         if event.frame_id is None:
             logger.debug("Skipping presentation event with no frame_id")
+            return None
+
+        elapsed = time.monotonic() - self._last_process_time
+        if elapsed < self._backoff_seconds:
+            logger.debug("Backoff: skipping presentation event (%.1fs remaining)", self._backoff_seconds - elapsed)
             return None
 
         snapshot_path = await self._get_snapshot_path(event.frame_id, db)
@@ -77,6 +86,7 @@ class PresentationCritiqueAgent(ReasoningAgent):
 
         image_bytes = await asyncio.to_thread(self._encode_image, image)
 
+        self._last_process_time = time.monotonic()
         try:
             raw = await self._call_gemini(image_bytes)
         except Exception:

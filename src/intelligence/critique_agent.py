@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 
 from src.intelligence.reasoning_agent import ReasoningAgent
 from src.llm.client import LLMClient
@@ -29,8 +30,10 @@ Respond ONLY with valid JSON, no markdown fences or extra text."""
 class CritiqueReasoningAgent(ReasoningAgent):
     """Analyzes allowlisted browser pages for inconsistencies and red flags."""
 
-    def __init__(self, llm: LLMClient) -> None:
+    def __init__(self, llm: LLMClient, *, backoff_seconds: float = 20.0) -> None:
         self._llm = llm
+        self._backoff_seconds = backoff_seconds
+        self._last_process_time: float = 0.0
 
     @property
     def name(self) -> str:
@@ -44,6 +47,11 @@ class CritiqueReasoningAgent(ReasoningAgent):
         page_text = event.metadata.get("text")
         if not page_text:
             logger.debug("Skipping browser_content event %s — no page text", event.id)
+            return None
+
+        elapsed = time.monotonic() - self._last_process_time
+        if elapsed < self._backoff_seconds:
+            logger.debug("Backoff: skipping event %s (%.1fs remaining)", event.id, self._backoff_seconds - elapsed)
             return None
 
         url = event.metadata.get("url", "")
@@ -64,6 +72,7 @@ class CritiqueReasoningAgent(ReasoningAgent):
 
         user_prompt = self._build_prompt(url, title, label, page_text, visual_summary)
 
+        self._last_process_time = time.monotonic()
         logger.debug("Sending critique prompt (%d chars) to LLM", len(user_prompt))
         try:
             response = await self._llm.complete(
