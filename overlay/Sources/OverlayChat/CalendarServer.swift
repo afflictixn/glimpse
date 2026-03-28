@@ -276,111 +276,25 @@ final class CalendarServer {
 
     // MARK: - iMessage Handlers
 
-    /// Extract readable text from an iMessage attributedBody NSKeyedArchiver blob.
-    private func extractTextFromAttributedBody(_ blob: Data) -> String? {
-        let bytes = [UInt8](blob)
-        var bestRun = ""
-        var currentRun = ""
-        let markers = ["nsmutable", "nsattributed", "streamtyped", "nsstring", "nsobject"]
-
-        for byte in bytes {
-            if byte >= 0x20 && byte < 0x7F || byte >= 0xC0 {
-                currentRun.append(Character(UnicodeScalar(byte)))
-            } else {
-                if currentRun.count > bestRun.count && currentRun.count > 3 {
-                    let lower = currentRun.lowercased()
-                    if !markers.contains(where: { lower.contains($0) }) && !lower.hasPrefix("@") {
-                        bestRun = currentRun
-                    }
-                }
-                currentRun = ""
-            }
-        }
-        if currentRun.count > bestRun.count && currentRun.count > 3 {
-            let lower = currentRun.lowercased()
-            if !markers.contains(where: { lower.contains($0) }) {
-                bestRun = currentRun
-            }
-        }
-        return bestRun.isEmpty ? nil : bestRun
-    }
-
-    /// Query iMessage DB, extracting text from attributedBody blobs when text column is NULL.
-    private func queryIMessageDB(_ sql: String, limit: Int) -> [[String: Any]] {
-        var db: OpaquePointer?
-        guard sqlite3_open_v2(chatDBPath, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else { return [] }
-        defer { sqlite3_close(db) }
-
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
-        defer { sqlite3_finalize(stmt) }
-
-        var rows: [[String: Any]] = []
-        while sqlite3_step(stmt) == SQLITE_ROW {
-            let colCount = sqlite3_column_count(stmt)
-            var row: [String: Any] = [:]
-            for i in 0..<colCount {
-                let name = String(cString: sqlite3_column_name(stmt, i))
-                if name == "attributedBody" {
-                    if sqlite3_column_type(stmt, i) == SQLITE_BLOB {
-                        let len = sqlite3_column_bytes(stmt, i)
-                        if let ptr = sqlite3_column_blob(stmt, i), len > 0 {
-                            row[name] = Data(bytes: ptr, count: Int(len))
-                        }
-                    }
-                } else {
-                    switch sqlite3_column_type(stmt, i) {
-                    case SQLITE_TEXT:
-                        row[name] = String(cString: sqlite3_column_text(stmt, i))
-                    case SQLITE_INTEGER:
-                        row[name] = sqlite3_column_int64(stmt, i)
-                    case SQLITE_FLOAT:
-                        row[name] = sqlite3_column_double(stmt, i)
-                    default:
-                        break
-                    }
-                }
-            }
-
-            // Resolve text: prefer text column, fall back to attributedBody extraction
-            let textCol = row["text"] as? String ?? ""
-            let resolved: String
-            if !textCol.isEmpty {
-                resolved = textCol
-            } else if let blob = row["attributedBody"] as? Data {
-                resolved = extractTextFromAttributedBody(blob) ?? ""
-            } else {
-                resolved = ""
-            }
-
-            if !resolved.isEmpty {
-                row["text"] = resolved
-                row.removeValue(forKey: "attributedBody")
-                rows.append(row)
-                if rows.count >= limit { break }
-            }
-        }
-        return rows
-    }
-
-    private let iMessageBaseSQL = """
-        SELECT
-            c.display_name,
-            c.chat_identifier,
-            m.text,
-            m.attributedBody,
-            datetime(m.date/1000000000 + 978307200, 'unixepoch', 'localtime') as msg_date,
-            m.is_from_me
-        FROM message m
-        JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
-        JOIN chat c ON c.ROWID = cmj.chat_id
-    """
-
     private func handleIMessageRecent(_ raw: String) -> String {
         let limit = min(parseIntParam(raw, name: "limit", fallback: 10), 50)
-        let sql = iMessageBaseSQL + " ORDER BY m.date DESC LIMIT \(limit * 3)"
-        let results = queryIMessageDB(sql, limit: limit)
-        return results.isEmpty ? "{\"messages\": [], \"note\": \"No messages found.\"}" : toJSON(results)
+
+        let sql = """
+            SELECT
+                c.display_name,
+                c.chat_identifier,
+                m.text,
+                datetime(m.date/1000000000 + 978307200, 'unixepoch', 'localtime') as msg_date,
+                m.is_from_me
+            FROM message m
+            JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
+            JOIN chat c ON c.ROWID = cmj.chat_id
+            WHERE m.text IS NOT NULL AND m.text != ''
+            ORDER BY m.date DESC
+            LIMIT \(limit)
+        """
+
+        return querySQLiteDB(sql)
     }
 
     private func handleIMessageSearch(_ raw: String) -> String {
@@ -391,18 +305,22 @@ final class CalendarServer {
             return "{\"error\": \"Missing required parameter: q\"}"
         }
 
-        // Fetch a large batch and filter in Swift after extracting attributedBody text
-        let sql = iMessageBaseSQL + " ORDER BY m.date DESC LIMIT \(limit * 20)"
-        let allRows = queryIMessageDB(sql, limit: limit * 20)
-        let lowerQuery = query.lowercased()
-        var results: [[String: Any]] = []
-        for row in allRows {
-            if let text = row["text"] as? String, text.lowercased().contains(lowerQuery) {
-                results.append(row)
-                if results.count >= limit { break }
-            }
-        }
-        return results.isEmpty ? "{\"messages\": [], \"note\": \"No messages found.\"}" : toJSON(results)
+        let sql = """
+            SELECT
+                c.display_name,
+                c.chat_identifier,
+                m.text,
+                datetime(m.date/1000000000 + 978307200, 'unixepoch', 'localtime') as msg_date,
+                m.is_from_me
+            FROM message m
+            JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
+            JOIN chat c ON c.ROWID = cmj.chat_id
+            WHERE m.text LIKE '%\(query.replacingOccurrences(of: "'", with: "''"))%'
+            ORDER BY m.date DESC
+            LIMIT \(limit)
+        """
+
+        return querySQLiteDB(sql)
     }
 
     private func handleIMessageConversation(_ raw: String) -> String {
@@ -414,13 +332,25 @@ final class CalendarServer {
         }
 
         let escaped = contact.replacingOccurrences(of: "'", with: "''")
-        let sql = iMessageBaseSQL + """
-            WHERE (c.display_name LIKE '%\(escaped)%'
-                   OR c.chat_identifier LIKE '%\(escaped)%')
-            ORDER BY m.date DESC LIMIT \(limit * 3)
+
+        let sql = """
+            SELECT
+                c.display_name,
+                c.chat_identifier,
+                m.text,
+                datetime(m.date/1000000000 + 978307200, 'unixepoch', 'localtime') as msg_date,
+                m.is_from_me
+            FROM message m
+            JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
+            JOIN chat c ON c.ROWID = cmj.chat_id
+            WHERE m.text IS NOT NULL AND m.text != ''
+                AND (c.display_name LIKE '%\(escaped)%'
+                     OR c.chat_identifier LIKE '%\(escaped)%')
+            ORDER BY m.date DESC
+            LIMIT \(limit)
         """
-        let results = queryIMessageDB(sql, limit: limit)
-        return results.isEmpty ? "{\"messages\": [], \"note\": \"No messages found.\"}" : toJSON(results)
+
+        return querySQLiteDB(sql)
     }
 
     private func querySQLiteDB(_ sql: String, dbPath: String? = nil, errorHint: String = "Grant Full Disk Access to ZExpOverlay.") -> String {

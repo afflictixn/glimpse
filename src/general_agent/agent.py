@@ -39,16 +39,11 @@ proactively surfaces useful information. You have access to the user's \
 screen capture history, OCR text, events, and actions stored in a local database.
 
 Use tools when you need to look up information. Prefer the database tools for \
-anything the user has seen on screen. Use web_search for external information.
+anything the user has seen on screen. Use web_search or price_lookup for \
+external information.
 
-CRITICAL RULES:
-- NEVER invent, fabricate, or hallucinate facts. No made-up birthdays, dates, \
-trips, plans, or suggestions unless the data explicitly contains them.
-- Only mention a birthday if you see an actual date in the tool results.
-- Only mention trips or plans if the user's messages or calendar explicitly mention them.
-- If you have no relevant context, say nothing or say you have no info. \
-Silence is better than a hallucinated suggestion.
-- Keep responses concise — one or two sentences max.
+Keep responses concise and helpful. If you have no relevant information, say so \
+briefly rather than making things up.
 
 {context}\
 """
@@ -154,9 +149,6 @@ class GeneralAgent:
         self._running = True
         logger.info("General agent started (overlay WS: %s)", self._overlay_ws_url)
 
-        # Start WS keepalive in background
-        keepalive_task = asyncio.create_task(self._ws_keepalive())
-
         while self._running:
             try:
                 item = await asyncio.wait_for(self._queue.get(), timeout=1.0)
@@ -172,7 +164,6 @@ class GeneralAgent:
             except Exception:
                 logger.error("General agent failed processing item", exc_info=True)
 
-        keepalive_task.cancel()
         logger.info("General agent stopped")
 
     async def stop(self) -> None:
@@ -194,11 +185,7 @@ class GeneralAgent:
             return
 
         agent_name = item.data.get("agent_name", "")
-
-        # If this looks like a messaging app, enrich with iMessage history
-        if self._is_messaging_event(item):
-            notification = await self._handle_messaging_event(item, summary)
-        elif agent_name == "social_context":
+        if agent_name == "social_context":
             notification = await self._analyze_social_context(summary)
         else:
             notification = await self._analyze_screen_context(item, summary)
@@ -219,20 +206,8 @@ class GeneralAgent:
         self._filter.record_notification(summary)
         logger.info("Surfaced to overlay: %s", notification[:100])
 
-    _WALLPAPER_SIGNALS = [
-        "wallpaper", "screensaver", "desktop background", "lock screen",
-        "scenic image", "landscape photo", "moment of relaxation",
-        "visual distraction", "break during",
-    ]
-
     async def _analyze_screen_context(self, item: PushItem, summary: str) -> str:
         """Let the LLM decide if the screen context is worth a proactive notification."""
-        # Pre-filter: skip wallpaper/idle events before wasting an LLM call
-        summary_lower = summary.lower()
-        if any(sig in summary_lower for sig in self._WALLPAPER_SIGNALS):
-            logger.debug("Skipping wallpaper/idle event: %s", summary[:80])
-            return ""
-
         from datetime import date
         today = date.today().isoformat()
 
@@ -266,12 +241,7 @@ class GeneralAgent:
             "- Do NOT say 'I see you are viewing…' or 'You are currently on…'.\n"
             "- Only speak up if you have something actionable or genuinely helpful.\n"
             "- If you have nothing useful to add, respond with exactly: NOTHING\n"
-            "- Keep responses to 1-2 sentences, friendly and concise.\n"
-            "- IGNORE desktop wallpapers, screensavers, and background images. "
-            "A scenic landscape on screen does NOT mean the user is planning a trip. "
-            "NEVER suggest trips, travel, or vacation based on what looks like a wallpaper.\n"
-            "- IGNORE idle screens, lock screens, and desktop with no active app.\n"
-            "- NEVER invent or hallucinate facts, dates, plans, or suggestions.\n\n"
+            "- Keep responses to 1-2 sentences, friendly and concise.\n\n"
             "Good examples:\n"
             '- "Friendly reminder: your friend Walter\'s birthday is on April 2nd. That\'s in 5 days. Consider getting a gift."\n'
             '- "The color used for the header of the presentation doesn\'t contrast well with the background. Try using <hex code> instead."\n'
@@ -279,9 +249,7 @@ class GeneralAgent:
             "Bad examples (NEVER do these):\n"
             '- "You are viewing a product page on Amazon."\n'
             '- "I see you\'re browsing Reddit."\n'
-            '- "You are currently reading an article about AI."\n'
-            '- "Beautiful scenery! Have you considered visiting Lake Tahoe?"\n'
-            '- "Looks like you might be planning a trip!"'
+            '- "You are currently reading an article about AI."'
         )
 
         messages = [
@@ -291,7 +259,6 @@ class GeneralAgent:
         try:
             response = await self._llm.complete(messages)
             result = response.content.strip()
-            logger.info("Screen context LLM response: %.100s", result)
             if "NOTHING" in result.upper() or not result:
                 return ""
             return result
@@ -329,125 +296,6 @@ class GeneralAgent:
         except Exception:
             logger.error("Social context LLM analysis failed", exc_info=True)
             return ""
-
-    _MESSAGING_KEYWORDS = {
-        "messages", "imessage", "whatsapp", "telegram", "signal",
-        "slack", "discord", "messenger", "wechat",
-    }
-
-    def _is_messaging_event(self, item: PushItem) -> bool:
-        """Check if this event is from a messaging app based on GemmaAgent output."""
-        data = item.data
-        app_name = (data.get("app_name") or "").lower()
-        summary = (data.get("summary") or "").lower()
-        for kw in self._MESSAGING_KEYWORDS:
-            if kw in app_name or kw in summary:
-                return True
-        return False
-
-    async def _handle_messaging_event(self, item: PushItem, summary: str) -> str:
-        """When user opens a messaging app, fetch recent chats and look for insights."""
-        logger.info("Messaging event detected — fetching recent conversations")
-
-        context_parts = ["User is in a messaging app."]
-
-        try:
-            recent_result = await self._tools.call(
-                "imessage_recent", limit="5",
-            )
-            parsed = json.loads(recent_result)
-            if isinstance(parsed, list) and parsed:
-                for conv in parsed[:3]:
-                    contact = conv.get("chat_identifier") or conv.get("display_name") or ""
-                    display = conv.get("display_name") or contact
-                    if not contact:
-                        continue
-
-                    context_parts.append(f"--- Conversation with {display} ({contact}) ---")
-
-                    # Fetch recent messages
-                    try:
-                        msgs_result = await self._tools.call(
-                            "imessage_conversation", contact=contact, limit="20",
-                        )
-                        msgs = json.loads(msgs_result)
-                        if isinstance(msgs, list) and msgs:
-                            msg_lines = []
-                            for m in msgs[:20]:
-                                sender = "me" if m.get("is_from_me") else display
-                                text = (m.get("text") or "")[:200]
-                                ts = m.get("msg_date") or m.get("timestamp") or ""
-                                if text:
-                                    msg_lines.append(f"[{ts}] {sender}: {text}")
-                            if msg_lines:
-                                msg_lines.reverse()
-                                context_parts.append("\n".join(msg_lines))
-                    except Exception:
-                        logger.debug("iMessage conversation fetch failed for %s", contact)
-
-                    # Search this contact's ENTIRE message history for birthday mentions
-                    try:
-                        bday_result = await self._tools.call(
-                            "imessage_search", query="birthday", limit="10",
-                        )
-                        bday_msgs = json.loads(bday_result)
-                        if isinstance(bday_msgs, list) and bday_msgs:
-                            # Filter to this contact's messages
-                            relevant = [
-                                m for m in bday_msgs
-                                if contact.lower() in (m.get("chat_identifier") or "").lower()
-                                or contact.lower() in (m.get("display_name") or "").lower()
-                            ]
-                            if relevant:
-                                bday_lines = []
-                                for m in relevant[:5]:
-                                    sender = "me" if m.get("is_from_me") else display
-                                    text = (m.get("text") or "")[:200]
-                                    ts = m.get("msg_date") or m.get("timestamp") or ""
-                                    bday_lines.append(f"[{ts}] {sender}: {text}")
-                                context_parts.append(
-                                    f"BIRTHDAY-RELATED MESSAGES with {display}:\n"
-                                    + "\n".join(bday_lines)
-                                )
-
-                        # Also search for "bday" and "born"
-                        for keyword in ("bday", "born", "turning"):
-                            extra = await self._tools.call(
-                                "imessage_search", query=keyword, limit="5",
-                            )
-                            extra_msgs = json.loads(extra)
-                            if isinstance(extra_msgs, list):
-                                for m in extra_msgs:
-                                    if contact.lower() in (m.get("chat_identifier") or "").lower():
-                                        text = (m.get("text") or "")[:200]
-                                        ts = m.get("msg_date") or ""
-                                        if text:
-                                            context_parts.append(f"[{ts}] {display}: {text}")
-                    except Exception:
-                        logger.debug("Birthday search failed for %s", contact)
-
-                    # Check stored memories about this person
-                    try:
-                        mem_result = await self._tools.call(
-                            "memory_query", query=display or contact, entity_type="person",
-                        )
-                        mems = json.loads(mem_result)
-                        if isinstance(mems, list):
-                            for mem in mems[:2]:
-                                if isinstance(mem, dict) and mem.get("fact"):
-                                    context_parts.append(f"Remembered about {display}: {mem['fact']}")
-                    except Exception:
-                        pass
-
-        except Exception:
-            logger.debug("iMessage recent fetch failed")
-            return await self._analyze_screen_context(item, summary)
-
-        if len(context_parts) <= 1:
-            return ""
-
-        raw_context = "\n\n".join(context_parts)
-        return await self._analyze_social_context(raw_context)
 
     def _extract_summary(self, item: PushItem) -> str:
         data = item.data
@@ -539,77 +387,29 @@ class GeneralAgent:
 
     # ── WebSocket to overlay ───────────────────────────────────
 
-    async def _ws_connect(self) -> bool:
-        """Establish WS connection. Returns True on success."""
+    async def _ws_send(self, message: dict[str, Any]) -> None:
+        """Send a JSON message to the overlay via WebSocket."""
         import websockets
 
-        try:
+        async with self._ws_lock:
+            try:
+                if self._ws_connection is None:
+                    self._ws_connection = await websockets.connect(self._overlay_ws_url)
+                    logger.info("Connected to overlay WebSocket at %s", self._overlay_ws_url)
+
+                await self._ws_connection.send(json.dumps(message))
+            except Exception:
+                logger.debug("WebSocket send failed, will reconnect next time", exc_info=True)
+                self._ws_connection = None
+
+    async def _ws_disconnect(self) -> None:
+        async with self._ws_lock:
             if self._ws_connection is not None:
                 try:
                     await self._ws_connection.close()
                 except Exception:
                     pass
                 self._ws_connection = None
-
-            self._ws_connection = await asyncio.wait_for(
-                websockets.connect(self._overlay_ws_url, ping_interval=20, ping_timeout=10),
-                timeout=5,
-            )
-            logger.info("WS connected to overlay at %s", self._overlay_ws_url)
-            return True
-        except Exception:
-            self._ws_connection = None
-            return False
-
-    async def _ws_keepalive(self) -> None:
-        """Background task: maintain WS connection, reconnect on drop."""
-        while self._running:
-            try:
-                if self._ws_connection is None:
-                    await self._ws_connect()
-
-                # Check if connection is still alive
-                if self._ws_connection is not None:
-                    try:
-                        await self._ws_connection.ping()
-                    except Exception:
-                        logger.debug("WS ping failed, reconnecting")
-                        self._ws_connection = None
-                        await self._ws_connect()
-
-                await asyncio.sleep(10)
-            except asyncio.CancelledError:
-                break
-            except Exception:
-                await asyncio.sleep(5)
-
-    async def _ws_send(self, message: dict[str, Any]) -> None:
-        """Send a JSON message to the overlay via WebSocket."""
-        for attempt in range(3):
-            try:
-                if self._ws_connection is None:
-                    if not await self._ws_connect():
-                        if attempt < 2:
-                            await asyncio.sleep(0.5)
-                        continue
-
-                await self._ws_connection.send(json.dumps(message))
-                return
-            except Exception:
-                logger.debug("WS send failed (attempt %d/3)", attempt + 1)
-                self._ws_connection = None
-                if attempt < 2:
-                    await asyncio.sleep(0.5)
-
-        logger.warning("WS send failed after 3 attempts, message dropped")
-
-    async def _ws_disconnect(self) -> None:
-        if self._ws_connection is not None:
-            try:
-                await self._ws_connection.close()
-            except Exception:
-                pass
-            self._ws_connection = None
 
     # ── WebSocket listener (overlay → agent) ───────────────────
 
