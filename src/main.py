@@ -19,6 +19,7 @@ from src.general_agent.tools import ToolRegistry
 from src.llm import create_llm_client
 from src.intelligence.intelligence_layer import IntelligenceLayer
 from src.intelligence.critique_agent import CritiqueReasoningAgent
+from src.intelligence.presentation_critique_agent import PresentationCritiqueAgent
 from src.process.browser_content_agent import BrowserContentAgent
 from src.process.gemma_agent import GemmaAgent
 from src.process.process_agent import ProcessAgent
@@ -107,6 +108,12 @@ async def run(settings: Settings) -> None:
 
     reasoning_agents: list[ReasoningAgent] = [
         CritiqueReasoningAgent(llm=llm_client),
+        PresentationCritiqueAgent(
+            ollama_base_url=settings.ollama_base_url,
+            model=settings.ollama_model,
+            timeout_s=settings.ollama_timeout_s,
+            max_image_width=settings.ollama_max_image_width,
+        ),
     ]
     general_agent = GeneralAgent(
         db=db,
