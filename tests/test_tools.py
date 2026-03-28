@@ -14,7 +14,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 import pytest_asyncio
 
-from src.general_agent.tools import ToolRegistry, ToolSpec
+from src.general_agent.tools import ToolRegistry
+from src.llm.types import ToolSpec
 from src.storage.database import DatabaseManager
 from src.storage.models import Event, Frame, OCRResult, AppType
 
@@ -55,7 +56,7 @@ async def _seed_db(db: DatabaseManager) -> int:
 class TestToolRegistry:
     def test_list_specs_returns_all_builtin_tools(self, tools: ToolRegistry):
         specs = tools.list_specs()
-        names = {s["name"] for s in specs}
+        names = {s.name for s in specs}
         expected = {
             "db_query", "db_raw_sql", "web_search", "fetch_url",
             "price_lookup", "contact_lookup", "contacts_search",
@@ -65,9 +66,9 @@ class TestToolRegistry:
         assert expected == names
 
     def test_get_existing_tool(self, tools: ToolRegistry):
-        spec = tools.get("web_search")
-        assert spec is not None
-        assert spec.name == "web_search"
+        tool = tools.get("web_search")
+        assert tool is not None
+        assert tool.spec.name == "web_search"
 
     def test_get_nonexistent_tool(self, tools: ToolRegistry):
         assert tools.get("nonexistent") is None
@@ -79,21 +80,27 @@ class TestToolRegistry:
         assert "Unknown tool" in result["error"]
 
     def test_register_custom_tool(self, tools: ToolRegistry):
+        from src.general_agent.tools import RegisteredTool
+
         async def dummy(**kwargs):
             return json.dumps({"ok": True})
 
-        tools.register(ToolSpec(
-            name="custom", description="test", parameters={}, fn=dummy,
+        tools.register(RegisteredTool(
+            spec=ToolSpec(name="custom", description="test", parameters={}),
+            fn=dummy,
         ))
         assert tools.get("custom") is not None
 
     @pytest.mark.asyncio
     async def test_call_catches_exceptions(self, tools: ToolRegistry):
+        from src.general_agent.tools import RegisteredTool
+
         async def failing(**kwargs):
             raise RuntimeError("boom")
 
-        tools.register(ToolSpec(
-            name="failing", description="fails", parameters={}, fn=failing,
+        tools.register(RegisteredTool(
+            spec=ToolSpec(name="failing", description="fails", parameters={}),
+            fn=failing,
         ))
         result = json.loads(await tools.call("failing"))
         assert "error" in result

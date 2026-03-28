@@ -7,19 +7,19 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Callable, Awaitable
 
+from src.llm.types import ToolSpec
 from src.storage.database import DatabaseManager
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
-class ToolSpec:
-    name: str
-    description: str
-    parameters: dict[str, str]  # param_name -> description
+class RegisteredTool:
+    """Pairs a portable ToolSpec with its implementation."""
+    spec: ToolSpec
     fn: Callable[..., Awaitable[str]]
 
 
@@ -28,191 +28,196 @@ class ToolRegistry:
 
     def __init__(self, db: DatabaseManager) -> None:
         self._db = db
-        self._tools: dict[str, ToolSpec] = {}
+        self._tools: dict[str, RegisteredTool] = {}
         self._register_builtins()
 
     def _register_builtins(self) -> None:
-        self.register(ToolSpec(
-            name="db_query",
-            description=(
-                "Query the Glimpse database. Supports full-text search across OCR text, "
-                "events, context, and actions. Use this to look up what the user was doing, "
-                "find past screen content, or check event/action history."
+        self.register(RegisteredTool(
+            spec=ToolSpec(
+                name="db_query",
+                description=(
+                    "Query the Glimpse database. Supports full-text search across OCR text, "
+                    "events, context, and actions. Use this to look up what the user was doing, "
+                    "find past screen content, or check event/action history."
+                ),
+                parameters={
+                    "table": "One of: ocr, events, context, actions",
+                    "query": "FTS5 search query string",
+                    "limit": "Max results (default 10)",
+                },
             ),
-            parameters={
-                "table": "One of: ocr, events, context, actions",
-                "query": "FTS5 search query string",
-                "limit": "Max results (default 10)",
-            },
             fn=self._db_query,
         ))
-        self.register(ToolSpec(
-            name="db_raw_sql",
-            description=(
-                "Execute a raw SELECT query against the Glimpse SQLite database. "
-                "Use for complex queries that the FTS search tools can't handle."
+        self.register(RegisteredTool(
+            spec=ToolSpec(
+                name="db_raw_sql",
+                description=(
+                    "Execute a raw SELECT query against the Glimpse SQLite database. "
+                    "Use for complex queries that the FTS search tools can't handle."
+                ),
+                parameters={
+                    "sql": "SELECT query to execute",
+                    "limit": "Max rows (default 20)",
+                },
             ),
-            parameters={
-                "sql": "SELECT query to execute",
-                "limit": "Max rows (default 20)",
-            },
             fn=self._db_raw_sql,
         ))
-        self.register(ToolSpec(
-            name="web_search",
-            description=(
-                "Search the web for information. Returns a summary of top results. "
-                "Use for price checks, fact verification, looking up people/companies, etc."
+        self.register(RegisteredTool(
+            spec=ToolSpec(
+                name="web_search",
+                description=(
+                    "Search the web for information. Returns a summary of top results. "
+                    "Use for price checks, fact verification, looking up people/companies, etc."
+                ),
+                parameters={"query": "Search query string"},
             ),
-            parameters={
-                "query": "Search query string",
-            },
             fn=self._web_search,
         ))
-        self.register(ToolSpec(
-            name="fetch_url",
-            description=(
-                "Fetch and extract text content from a URL. Use to read page content "
-                "the user is viewing — terms of service, product listings, articles, etc."
+        self.register(RegisteredTool(
+            spec=ToolSpec(
+                name="fetch_url",
+                description=(
+                    "Fetch and extract text content from a URL. Use to read page content "
+                    "the user is viewing — terms of service, product listings, articles, etc."
+                ),
+                parameters={"url": "The URL to fetch"},
             ),
-            parameters={
-                "url": "The URL to fetch",
-            },
             fn=self._fetch_url,
         ))
-        self.register(ToolSpec(
-            name="price_lookup",
-            description=(
-                "Look up current prices for a product across sources. "
-                "Searches the web with price-focused queries and returns comparisons."
+        self.register(RegisteredTool(
+            spec=ToolSpec(
+                name="price_lookup",
+                description=(
+                    "Look up current prices for a product across sources. "
+                    "Searches the web with price-focused queries and returns comparisons."
+                ),
+                parameters={"product": "Product name or description to look up"},
             ),
-            parameters={
-                "product": "Product name or description to look up",
-            },
             fn=self._price_lookup,
         ))
-        self.register(ToolSpec(
-            name="contact_lookup",
-            description=(
-                "Look up context about a person from Glimpse event history — "
-                "recent interactions, mentions, social context gathered from screen captures."
+        self.register(RegisteredTool(
+            spec=ToolSpec(
+                name="contact_lookup",
+                description=(
+                    "Look up context about a person from Glimpse event history — "
+                    "recent interactions, mentions, social context gathered from screen captures."
+                ),
+                parameters={"name": "Person's name to search for"},
             ),
-            parameters={
-                "name": "Person's name to search for",
-            },
             fn=self._contact_lookup,
         ))
-        self.register(ToolSpec(
-            name="contacts_search",
-            description=(
-                "Search macOS Contacts for a person. Returns name, emails, phones, "
-                "and birthday if available. Requires Contacts permission on macOS."
+        self.register(RegisteredTool(
+            spec=ToolSpec(
+                name="contacts_search",
+                description=(
+                    "Search macOS Contacts for a person. Returns name, emails, phones, "
+                    "and birthday if available. Requires Contacts permission on macOS."
+                ),
+                parameters={"name": "Person's name to search for"},
             ),
-            parameters={
-                "name": "Person's name to search for",
-            },
             fn=self._contacts_search,
         ))
-        self.register(ToolSpec(
-            name="calendar_events",
-            description=(
-                "Fetch upcoming calendar events from macOS Calendar. "
-                "Use to check for scheduling conflicts, upcoming meetings, etc."
+        self.register(RegisteredTool(
+            spec=ToolSpec(
+                name="calendar_events",
+                description=(
+                    "Fetch upcoming calendar events from macOS Calendar. "
+                    "Use to check for scheduling conflicts, upcoming meetings, etc."
+                ),
+                parameters={"days_ahead": "Number of days to look ahead (default 7)"},
             ),
-            parameters={
-                "days_ahead": "Number of days to look ahead (default 7)",
-            },
             fn=self._calendar_events,
         ))
-        self.register(ToolSpec(
-            name="memory_store",
-            description=(
-                "Store a fact about an entity (person, product, price, pattern, preference) "
-                "for long-term recall. Use to remember user habits, prices seen, people met, etc."
+        self.register(RegisteredTool(
+            spec=ToolSpec(
+                name="memory_store",
+                description=(
+                    "Store a fact about an entity (person, product, price, pattern, preference) "
+                    "for long-term recall. Use to remember user habits, prices seen, people met, etc."
+                ),
+                parameters={
+                    "entity_type": "One of: person, product, price, pattern, preference",
+                    "entity_name": "Name of the entity (e.g. person name, product name)",
+                    "fact": "The fact to remember",
+                    "source": "Where this fact came from (optional)",
+                },
             ),
-            parameters={
-                "entity_type": "One of: person, product, price, pattern, preference",
-                "entity_name": "Name of the entity (e.g. person name, product name)",
-                "fact": "The fact to remember",
-                "source": "Where this fact came from (optional)",
-            },
             fn=self._memory_store,
         ))
-        self.register(ToolSpec(
-            name="memory_query",
-            description=(
-                "Search stored memories about entities. Use to recall user habits, "
-                "past prices, people context, product history, etc."
+        self.register(RegisteredTool(
+            spec=ToolSpec(
+                name="memory_query",
+                description=(
+                    "Search stored memories about entities. Use to recall user habits, "
+                    "past prices, people context, product history, etc."
+                ),
+                parameters={
+                    "query": "Search query for memories",
+                    "entity_type": "Filter by type: person, product, price, pattern, preference (optional)",
+                    "limit": "Max results (default 10)",
+                },
             ),
-            parameters={
-                "query": "Search query for memories",
-                "entity_type": "Filter by type: person, product, price, pattern, preference (optional)",
-                "limit": "Max results (default 10)",
-            },
             fn=self._memory_query,
         ))
-        self.register(ToolSpec(
-            name="social_profile",
-            description=(
-                "Look up a social media profile by handle. Returns display name, bio, "
-                "follower/following counts, and post count. Currently uses Bluesky — "
-                "pass handles like 'jay.bsky.social'."
+        self.register(RegisteredTool(
+            spec=ToolSpec(
+                name="social_profile",
+                description=(
+                    "Look up a social media profile by handle. Returns display name, bio, "
+                    "follower/following counts, and post count. Currently uses Bluesky — "
+                    "pass handles like 'jay.bsky.social'."
+                ),
+                parameters={"handle": "Social media handle (e.g. 'jay.bsky.social')"},
             ),
-            parameters={
-                "handle": "Social media handle (e.g. 'jay.bsky.social')",
-            },
             fn=self._social_profile,
         ))
-        self.register(ToolSpec(
-            name="social_feed",
-            description=(
-                "Get recent posts from a social media profile. Returns their latest posts "
-                "with text, timestamps, and engagement counts."
+        self.register(RegisteredTool(
+            spec=ToolSpec(
+                name="social_feed",
+                description=(
+                    "Get recent posts from a social media profile. Returns their latest posts "
+                    "with text, timestamps, and engagement counts."
+                ),
+                parameters={
+                    "handle": "Social media handle (e.g. 'jay.bsky.social')",
+                    "limit": "Max posts to return (default 10)",
+                },
             ),
-            parameters={
-                "handle": "Social media handle (e.g. 'jay.bsky.social')",
-                "limit": "Max posts to return (default 10)",
-            },
             fn=self._social_feed,
         ))
-        self.register(ToolSpec(
-            name="social_search",
-            description=(
-                "Search social media posts by keyword. Returns matching posts with author, "
-                "text, timestamps, and engagement. Use for trending topics, fact checking, "
-                "or finding what people are saying about something."
+        self.register(RegisteredTool(
+            spec=ToolSpec(
+                name="social_search",
+                description=(
+                    "Search social media posts by keyword. Returns matching posts with author, "
+                    "text, timestamps, and engagement. Use for trending topics, fact checking, "
+                    "or finding what people are saying about something."
+                ),
+                parameters={
+                    "query": "Search query string",
+                    "limit": "Max posts to return (default 10)",
+                    "sort": "Sort by: 'top' or 'latest' (default 'latest')",
+                },
             ),
-            parameters={
-                "query": "Search query string",
-                "limit": "Max posts to return (default 10)",
-                "sort": "Sort by: 'top' or 'latest' (default 'latest')",
-            },
             fn=self._social_search,
         ))
 
-    def register(self, spec: ToolSpec) -> None:
-        self._tools[spec.name] = spec
+    def register(self, tool: RegisteredTool) -> None:
+        self._tools[tool.spec.name] = tool
 
-    def get(self, name: str) -> ToolSpec | None:
+    def get(self, name: str) -> RegisteredTool | None:
         return self._tools.get(name)
 
-    def list_specs(self) -> list[dict[str, Any]]:
-        """Return tool specs formatted for the LLM system prompt."""
-        return [
-            {
-                "name": t.name,
-                "description": t.description,
-                "parameters": t.parameters,
-            }
-            for t in self._tools.values()
-        ]
+    def list_specs(self) -> list[ToolSpec]:
+        """Return portable tool specs for the LLM provider."""
+        return [t.spec for t in self._tools.values()]
 
     async def call(self, tool_name: str, **kwargs: Any) -> str:
-        spec = self._tools.get(tool_name)
-        if spec is None:
+        tool = self._tools.get(tool_name)
+        if tool is None:
             return json.dumps({"error": f"Unknown tool: {tool_name}"})
         try:
-            return await spec.fn(**kwargs)
+            return await tool.fn(**kwargs)
         except Exception as e:
             logger.error("Tool %s failed: %s", tool_name, e, exc_info=True)
             return json.dumps({"error": str(e)})
@@ -273,7 +278,6 @@ class ToolRegistry:
         return await self._web_search(query=f"{product} price buy compare")
 
     async def _contact_lookup(self, name: str = "") -> str:
-        # Search across OCR text and events for mentions of this person
         ocr_hits = await self._db.search(name, limit=5)
         event_hits = await self._db.search_events(name, limit=5)
         return json.dumps({
@@ -330,11 +334,7 @@ class ToolRegistry:
             return json.dumps({"error": f"Contacts search failed: {e}"})
 
     async def _calendar_events(self, days_ahead: str = "7") -> str:
-        """Fetch calendar events via the overlay's CalendarServer (port 9322).
-
-        The Swift overlay has EventKit permission (as a bundled .app) and exposes
-        calendar data over a local HTTP endpoint.
-        """
+        """Fetch calendar events via the overlay's CalendarServer (port 9322)."""
         import httpx
 
         logger.info("calendar_events called: days_ahead=%s", days_ahead)

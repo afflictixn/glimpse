@@ -30,6 +30,9 @@ class Settings:
     ollama_model: str = "gemma3:1b"
     include_ocr: bool = False
     ollama_timeout_s: int = 30
+    # LLM
+    llm_provider: str = "gemini"
+    llm_model: str = "gemini-3-flash-preview"
 
     # General agent
     overlay_ws_url: str = "ws://localhost:9321"
