@@ -98,14 +98,13 @@ struct SuggestionView: View {
     private func pillButton(_ label: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(label)
-                .font(.system(size: 9, weight: .medium, design: .rounded))
-                .foregroundColor(.white.opacity(0.45))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-                .background(
-                    Capsule(style: .continuous)
-                        .fill(Color.white.opacity(0.06))
-                )
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .foregroundColor(.white.opacity(0.85))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(Color.black.opacity(0.5))
+                .background(VisualEffectBackground(material: .hudWindow))
+                .clipShape(Capsule(style: .continuous))
         }
         .buttonStyle(.plain)
     }

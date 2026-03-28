@@ -16,12 +16,8 @@ struct SettingsView: View {
                 .padding(16)
             }
         }
-        .background(
-            ZStack {
-                Color.black.opacity(0.6)
-                Color(hue: 0.6, saturation: 0.5, brightness: 0.9).opacity(0.05)
-            }
-        )
+        .background(Color.black.opacity(0.5))
+        .background(VisualEffectBackground(material: .hudWindow, blurRadius: 5))
     }
 
     // MARK: - Header

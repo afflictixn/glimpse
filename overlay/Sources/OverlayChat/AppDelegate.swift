@@ -132,8 +132,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let screen = NSScreen.main else { return }
         let visibleFrame = screen.visibleFrame
 
-        let width: CGFloat = 300
-        let height: CGFloat = 360
+        let width = min(max(visibleFrame.width * 0.22, 280), 400)
+        let height = min(max(visibleFrame.height * 0.3, 320), 420)
         let origin = CGPoint(
             x: visibleFrame.maxX - width - 40,
             y: visibleFrame.minY + 60
@@ -158,6 +158,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let floatingView = FloatingOverlayView(state: overlayState, viewModel: chatViewModel)
         let hostingView = NSHostingView(rootView: floatingView)
+        hostingView.wantsLayer = true
+        hostingView.layer?.cornerRadius = 14
+        hostingView.layer?.cornerCurve = CALayerCornerCurve.continuous
+        hostingView.layer?.masksToBounds = true
         floatingOverlayWindow.contentView = hostingView
         floatingOverlayWindow.orderOut(nil)
     }
@@ -194,7 +198,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         chatPanel.hidesOnDeactivate = false
         chatPanel.animationBehavior = .utilityWindow
 
-        let chatView = ChatView(viewModel: chatViewModel, settings: overlayState.settings)
+        let chatView = ChatView(viewModel: chatViewModel, state: overlayState, settings: overlayState.settings)
         let hostingView = NSHostingView(rootView: chatView)
         hostingView.wantsLayer = true
         hostingView.layer?.cornerRadius = 12

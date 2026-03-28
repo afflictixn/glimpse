@@ -5,6 +5,12 @@ struct FloatingOverlayView: View {
     @ObservedObject var viewModel: ChatViewModel
     @State private var inactivityTask: Task<Void, Never>?
 
+    /// Scale with screen: ~300 on 13", ~340 on 14", ~380 on 16"
+    private static var responsiveWidth: CGFloat {
+        let screenWidth = NSScreen.main?.frame.width ?? 1440
+        return min(max(screenWidth * 0.22, 280), 400)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -13,19 +19,16 @@ struct FloatingOverlayView: View {
             Divider().overlay(Color.white.opacity(0.15))
             compactInput
         }
-        .frame(width: 300)
-        .background(
-            ZStack {
-                Color.black.opacity(0.6)
-                Color(hue: 0.6, saturation: 0.5, brightness: 0.9).opacity(0.05)
-            }
-        )
+        .frame(width: Self.responsiveWidth)
+        .background(Color.black.opacity(0.5))
+        .background(VisualEffectBackground(material: .hudWindow, blurRadius: 5, cornerRadius: 14))
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .strokeBorder(Color(hue: 0.6, saturation: 0.5, brightness: 0.9).opacity(0.15), lineWidth: 0.5)
         )
         .shadow(color: .black.opacity(0.3), radius: 20, y: 8)
+        .preferredColorScheme(.dark)
         .onAppear { resetInactivityTimer() }
         .onChange(of: viewModel.messages.count) { _ in resetInactivityTimer() }
         .onChange(of: viewModel.inputText) { _ in resetInactivityTimer() }
@@ -37,22 +40,28 @@ struct FloatingOverlayView: View {
         HStack(spacing: 8) {
             Text("z exp")
                 .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                .foregroundColor(.white.opacity(0.7))
+                .foregroundColor(.white)
 
             Spacer()
 
             Button(action: { state.expandToFullPanel() }) {
                 Image(systemName: "arrow.up.left.and.arrow.down.right")
-                    .font(.system(size: 10))
-                    .foregroundColor(.white.opacity(0.5))
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.white.opacity(0.85))
+                    .frame(width: 28, height: 28)
+                    .background(Color.white.opacity(0.08))
+                    .clipShape(Circle())
             }
             .buttonStyle(.plain)
             .help("Expand to full panel")
 
             Button(action: { state.dismissToAmbient() }) {
                 Image(systemName: "xmark")
-                    .font(.system(size: 10))
-                    .foregroundColor(.white.opacity(0.5))
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.white.opacity(0.85))
+                    .frame(width: 28, height: 28)
+                    .background(Color.white.opacity(0.08))
+                    .clipShape(Circle())
             }
             .buttonStyle(.plain)
             .help("Dismiss")
@@ -72,16 +81,7 @@ struct FloatingOverlayView: View {
                     }
 
                     if viewModel.isStreaming {
-                        HStack {
-                            ProgressView()
-                                .controlSize(.small)
-                                .scaleEffect(0.6)
-                            Text("thinking...")
-                                .font(.system(size: 10))
-                                .foregroundColor(.white.opacity(0.4))
-                            Spacer()
-                        }
-                        .padding(.leading, 8)
+                        ThinkingBubble()
                     }
 
                     Color.clear.frame(height: 1).id("float-bottom")
@@ -103,7 +103,10 @@ struct FloatingOverlayView: View {
         return Array(msgs.suffix(5))
     }
 
+    @ViewBuilder
     private func compactBubble(_ message: ChatMessage) -> some View {
+        if message.content.isEmpty { EmptyView() }
+        else {
         HStack {
             if message.role == .user { Spacer(minLength: 40) }
 
@@ -111,6 +114,7 @@ struct FloatingOverlayView: View {
                 .font(.system(size: 11))
                 .foregroundColor(.white.opacity(message.role == .user ? 0.9 : 0.75))
                 .lineLimit(nil)
+                .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
                 .background(
@@ -122,13 +126,14 @@ struct FloatingOverlayView: View {
 
             if message.role != .user { Spacer(minLength: 40) }
         }
+        }
     }
 
     // MARK: - Compact Input
 
     private var compactInput: some View {
         HStack(spacing: 6) {
-            TextField("Reply...", text: $viewModel.inputText)
+            TextField("", text: $viewModel.inputText, prompt: Text("Reply...").foregroundColor(.white.opacity(0.5)))
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
                 .foregroundColor(.white)
@@ -154,7 +159,7 @@ struct FloatingOverlayView: View {
                         .foregroundColor(
                             viewModel.inputText.trimmingCharacters(in: .whitespaces).isEmpty
                                 ? .white.opacity(0.2)
-                                : .blue
+                                : .white
                         )
                 }
                 .buttonStyle(.plain)
@@ -170,7 +175,7 @@ struct FloatingOverlayView: View {
     private func resetInactivityTimer() {
         inactivityTask?.cancel()
         inactivityTask = Task {
-            try? await Task.sleep(nanoseconds: 30_000_000_000) // 30s
+            try? await Task.sleep(nanoseconds: 120_000_000_000) // 2min
             guard !Task.isCancelled else { return }
             await MainActor.run {
                 // Only auto-dismiss if not actively streaming

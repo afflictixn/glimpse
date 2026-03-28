@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ChatView: View {
     @ObservedObject var viewModel: ChatViewModel
+    @ObservedObject var state: OverlayState
     @ObservedObject var settings: Settings
     @State private var showSettings: Bool = false
 
@@ -24,12 +25,9 @@ struct ChatView: View {
                 inputBar
             }
         }
-        .background(
-            ZStack {
-                Color.black.opacity(0.6)
-                Color(hue: 0.6, saturation: 0.5, brightness: 0.9).opacity(0.05)
-            }
-        )
+        .background(Color.black.opacity(0.5))
+        .background(VisualEffectBackground(material: .hudWindow, blurRadius: 5))
+        .preferredColorScheme(.dark)
     }
 
     // MARK: - Header
@@ -55,13 +53,13 @@ struct ChatView: View {
             .help(showSettings ? "Back to chat" : "Settings")
 
             if !showSettings {
-                Button(action: { viewModel.clearChat() }) {
-                    Image(systemName: "trash")
+                Button(action: { state.openFloatingOverlay() }) {
+                    Image(systemName: "arrow.down.right.and.arrow.up.left")
                         .font(.system(size: 12))
                         .foregroundColor(.white.opacity(0.6))
                     }
                     .buttonStyle(.plain)
-                    .help("Clear chat")
+                    .help("Compress to small overlay")
             }
 
             Button(action: { NSApp.keyWindow?.orderOut(nil) }) {
@@ -131,17 +129,8 @@ struct ChatView: View {
                     }
 
                     if viewModel.isStreaming {
-                        HStack {
-                            ProgressView()
-                                .controlSize(.small)
-                                .scaleEffect(0.7)
-                            Text("thinking...")
-                                .font(.system(size: 11))
-                                .foregroundColor(.white.opacity(0.4))
-                            Spacer()
-                        }
-                        .padding(.leading, 8)
-                        .id("streaming-indicator")
+                        ThinkingBubble()
+                            .id("streaming-indicator")
                     }
 
                     Color.clear
@@ -197,7 +186,7 @@ struct ChatView: View {
                 .buttonStyle(.plain)
                 .help("Capture screen")
 
-                TextField("Message...", text: $viewModel.inputText)
+                TextField("", text: $viewModel.inputText, prompt: Text("Message...").foregroundColor(.white.opacity(0.5)))
                     .textFieldStyle(.plain)
                     .font(.system(size: 13))
                     .foregroundColor(.white)
