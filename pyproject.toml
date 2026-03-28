@@ -15,6 +15,7 @@ dependencies = [
     "pyobjc-framework-Cocoa>=11.0",
     "pydantic>=2.0",
     "aiosqlite>=0.20",
+    "websockets>=13.0",
 ]
 
 [project.scripts]

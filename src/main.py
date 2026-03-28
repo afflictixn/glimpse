@@ -14,6 +14,8 @@ from src.capture.activity_feed import ActivityFeed
 from src.capture.event_tap import CaptureTrigger, EventTap
 from src.capture.triggers import CaptureLoop
 from src.config import Settings, set_settings
+from src.general_agent.agent import GeneralAgent
+from src.general_agent.tools import ToolRegistry
 from src.intelligence.intelligence_layer import IntelligenceLayer
 from src.process.gemma_agent import GemmaAgent
 from src.process.process_agent import ProcessAgent
@@ -37,6 +39,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ollama-model", type=str, default="gemma3:12b", help="Ollama model name")
     parser.add_argument("--ollama-url", type=str, default="http://localhost:11434", help="Ollama server base URL")
     parser.add_argument("--include-ocr", action="store_true", help="Include OCR text in Gemma agent prompt")
+    parser.add_argument("--overlay-ws-url", type=str, default="ws://localhost:9321", help="Overlay WebSocket URL")
     return parser.parse_args()
 
 
@@ -72,7 +75,15 @@ async def run(settings: Settings) -> None:
     context_providers: list[ContextProvider] = []
     reasoning_agents: list[ReasoningAgent] = []
 
-    intelligence = IntelligenceLayer(agents=reasoning_agents, db=db)
+    # General agent
+    tool_registry = ToolRegistry(db)
+    general_agent = GeneralAgent(
+        db=db,
+        tools=tool_registry,
+        overlay_ws_url=settings.overlay_ws_url,
+    )
+
+    intelligence = IntelligenceLayer(agents=reasoning_agents, db=db, general_agent=general_agent)
 
     trigger_queue: asyncio.Queue[CaptureTrigger] = asyncio.Queue()
     loop = asyncio.get_running_loop()
@@ -99,9 +110,10 @@ async def run(settings: Settings) -> None:
         process_agents=process_agents,
         context_providers=context_providers,
         intelligence_layer=intelligence,
+        general_agent=general_agent,
     )
 
-    app = create_app(db)
+    app = create_app(db, general_agent=general_agent)
 
     config = uvicorn.Config(
         app,
@@ -125,6 +137,7 @@ async def run(settings: Settings) -> None:
     event_tap.start()
     capture_task = asyncio.create_task(capture_loop.run())
     intelligence_task = asyncio.create_task(intelligence.run())
+    general_agent_task = asyncio.create_task(general_agent.run())
     cleanup = asyncio.create_task(
         cleanup_task(db, settings.cleanup_interval_hours)
     )
@@ -136,12 +149,14 @@ async def run(settings: Settings) -> None:
     logger.info("Shutting down...")
     await capture_loop.stop()
     await intelligence.stop()
+    await general_agent.stop()
     server.should_exit = True
     capture_task.cancel()
     intelligence_task.cancel()
+    general_agent_task.cancel()
     cleanup.cancel()
 
-    for t in (capture_task, intelligence_task, cleanup, server_task):
+    for t in (capture_task, intelligence_task, general_agent_task, cleanup, server_task):
         try:
             await t
         except asyncio.CancelledError:
@@ -183,6 +198,7 @@ def main() -> None:
         ollama_base_url=args.ollama_url,
         ollama_model=args.ollama_model,
         include_ocr=args.include_ocr,
+        overlay_ws_url=args.overlay_ws_url,
         debug=args.debug,
     )
 

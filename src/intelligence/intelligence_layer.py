@@ -3,9 +3,14 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from typing import TYPE_CHECKING
+
 from src.intelligence.reasoning_agent import ReasoningAgent
 from src.storage.database import DatabaseManager
 from src.storage.models import Action, Event
+
+if TYPE_CHECKING:
+    from src.general_agent.agent import GeneralAgent
 
 logger = logging.getLogger(__name__)
 
@@ -15,9 +20,11 @@ class IntelligenceLayer:
         self,
         agents: list[ReasoningAgent],
         db: DatabaseManager,
+        general_agent: GeneralAgent | None = None,
     ) -> None:
         self._agents = agents
         self._db = db
+        self._general_agent = general_agent
         self._event_queue: asyncio.Queue[Event] = asyncio.Queue()
         self._running = False
 
@@ -53,6 +60,15 @@ class IntelligenceLayer:
                 elif isinstance(result, Action):
                     try:
                         await self._db.insert_action(result)
+                        if self._general_agent is not None:
+                            await self._general_agent.push("action", {
+                                "event_id": result.event_id,
+                                "frame_id": result.frame_id,
+                                "agent_name": result.agent_name,
+                                "action_type": result.action_type,
+                                "action_description": result.action_description,
+                                "metadata": result.metadata,
+                            })
                     except Exception:
                         logger.error(
                             "Failed to insert action from %s",

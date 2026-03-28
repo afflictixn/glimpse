@@ -31,6 +31,9 @@ class Settings:
     include_ocr: bool = False
     ollama_timeout_s: int = 30
 
+    # General agent
+    overlay_ws_url: str = "ws://localhost:9321"
+
     # Debug
     debug: bool = False
 

@@ -6,14 +6,16 @@ import time
 from fastapi import FastAPI, Request, Response
 
 from src.api.routes import actions, context, events, frames, health, raw_sql, search
+from src.general_agent import server as agent_router
 from src.storage.database import DatabaseManager
 
 logger = logging.getLogger(__name__)
 
 
-def create_app(db: DatabaseManager) -> FastAPI:
+def create_app(db: DatabaseManager, general_agent=None) -> FastAPI:
     app = FastAPI(title="Glimpse", version="0.1.0")
     app.state.db = db
+    app.state.general_agent = general_agent
 
     @app.middleware("http")
     async def log_requests(request: Request, call_next) -> Response:
@@ -42,5 +44,6 @@ def create_app(db: DatabaseManager) -> FastAPI:
     app.include_router(actions.router)
     app.include_router(health.router)
     app.include_router(raw_sql.router)
+    app.include_router(agent_router.router)
 
     return app

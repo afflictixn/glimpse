@@ -21,6 +21,11 @@ from src.storage.database import DatabaseManager
 from src.storage.models import Frame
 from src.storage.snapshot_writer import SnapshotWriter
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from src.general_agent.agent import GeneralAgent
+
 logger = logging.getLogger(__name__)
 
 
@@ -35,6 +40,7 @@ class CaptureLoop:
         process_agents: list[ProcessAgent],
         context_providers: list[ContextProvider],
         intelligence_layer: IntelligenceLayer | None = None,
+        general_agent: GeneralAgent | None = None,
     ) -> None:
         self._settings = settings
         self._db = db
@@ -44,6 +50,7 @@ class CaptureLoop:
         self._agents = process_agents
         self._providers = context_providers
         self._intelligence = intelligence_layer
+        self._general_agent = general_agent
         self._comparer = FrameComparer()
         self._running = False
         self._last_capture_time = 0.0
@@ -168,6 +175,14 @@ class CaptureLoop:
                 event_id = await self._db.insert_event(frame_id, result)
                 if self._intelligence and result.id is not None:
                     await self._intelligence.submit(result)
+                if self._general_agent is not None:
+                    await self._general_agent.push("event", {
+                        "frame_id": frame_id,
+                        "agent_name": result.agent_name,
+                        "app_type": result.app_type,
+                        "summary": result.summary,
+                        "metadata": result.metadata,
+                    })
 
         for i, result in enumerate(provider_results):
             if isinstance(result, BaseException):
