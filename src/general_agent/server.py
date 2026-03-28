@@ -29,6 +29,10 @@ class ChatRequest(BaseModel):
     message: str
 
 
+class SpeakRequest(BaseModel):
+    text: str
+
+
 @router.post("/push", status_code=202)
 async def push(req: PushRequest, request: Request) -> dict:
     """Receive an event or action push. Returns 202 immediately."""
@@ -48,6 +52,19 @@ async def chat(req: ChatRequest, request: Request) -> dict:
     agent = request.app.state.general_agent
     response = await agent.chat(req.message)
     return {"response": response}
+
+
+@router.post("/speak")
+async def speak(req: SpeakRequest, request: Request) -> dict:
+    """Synthesize and play text via ElevenLabs TTS."""
+    agent = request.app.state.general_agent
+    if agent._voice is None:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "TTS not enabled — set ELEVENLABS_API_KEY in .env"},
+        )
+    await agent._voice.speak(req.text)
+    return {"status": "spoken", "text": req.text}
 
 
 @router.get("/status")

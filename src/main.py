@@ -23,6 +23,7 @@ from src.context.context_provider import ContextProvider
 from src.intelligence.reasoning_agent import ReasoningAgent
 from src.storage.database import DatabaseManager
 from src.storage.snapshot_writer import SnapshotWriter
+from src.voice.tts import VoiceClient
 
 logger = logging.getLogger("glimpse")
 
@@ -75,12 +76,23 @@ async def run(settings: Settings) -> None:
     context_providers: list[ContextProvider] = []
     reasoning_agents: list[ReasoningAgent] = []
 
+    # Voice (ElevenLabs TTS)
+    voice: VoiceClient | None = None
+    if settings.tts_enabled and settings.elevenlabs_api_key:
+        voice = VoiceClient(
+            api_key=settings.elevenlabs_api_key,
+            voice_id=settings.elevenlabs_voice_id,
+            model_id=settings.elevenlabs_model_id,
+        )
+        logger.info("ElevenLabs TTS enabled (voice: %s)", settings.elevenlabs_voice_id)
+
     # General agent
     tool_registry = ToolRegistry(db)
     general_agent = GeneralAgent(
         db=db,
         tools=tool_registry,
         overlay_ws_url=settings.overlay_ws_url,
+        voice=voice,
     )
 
     intelligence = IntelligenceLayer(agents=reasoning_agents, db=db, general_agent=general_agent)

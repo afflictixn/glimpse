@@ -4,6 +4,10 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 
 @dataclass
 class Settings:
@@ -33,6 +37,12 @@ class Settings:
 
     # General agent
     overlay_ws_url: str = "ws://localhost:9321"
+
+    # ElevenLabs TTS
+    elevenlabs_api_key: str = field(default_factory=lambda: os.getenv("ELEVENLABS_API_KEY", ""))
+    elevenlabs_voice_id: str = field(default_factory=lambda: os.getenv("ELEVENLABS_VOICE_ID", "jqcCZkN6Knx8BJ5TBdYR"))
+    elevenlabs_model_id: str = "eleven_multilingual_v2"
+    tts_enabled: bool = field(default_factory=lambda: bool(os.getenv("ELEVENLABS_API_KEY")))
 
     # Debug
     debug: bool = False

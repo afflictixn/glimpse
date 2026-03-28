@@ -13,7 +13,7 @@ struct EdgeGlowView: View {
         Color(hue: 0.6, saturation: 0.50, brightness: 0.78),
     ]
 
-    // All layers diffused — no sharp border line
+    // 4 glow layers — best depth / light falloff
     private static let lineWidths: [CGFloat] = [2, 5, 9, 14]
     private static let blurRadii: [CGFloat]  = [3, 8, 18, 28]
     private static let animDurations: [Double] = [1.2, 1.6, 2.0, 2.5]
@@ -28,10 +28,6 @@ struct EdgeGlowView: View {
         )
 
         ZStack {
-            // Glow layers — .stroke() centers on the shape boundary
-            // so half extends beyond the window (clipped by the OS),
-            // and only the inner half + blur bleeds onto the screen.
-            // This looks like light from behind the bezel, not a border.
             ForEach(0..<Self.lineWidths.count, id: \.self) { i in
                 RoundedRectangle(cornerRadius: 22, style: .continuous)
                     .stroke(gradient, lineWidth: Self.lineWidths[i])
@@ -42,7 +38,7 @@ struct EdgeGlowView: View {
                     )
             }
 
-            // Bright accent rim — like light catching the bezel edge
+            // Bright accent rim
             RoundedRectangle(cornerRadius: 22, style: .continuous)
                 .stroke(Color.white.opacity(0.12), lineWidth: 1.5)
                 .blur(radius: 3)
@@ -52,7 +48,10 @@ struct EdgeGlowView: View {
         .allowsHitTesting(false)
         .task {
             while !Task.isCancelled {
-                stops = Self.randomStops()
+                // Skip updates when invisible — saves GPU in idle
+                if state.mode != .idle && state.mode != .hidden {
+                    stops = Self.randomStops()
+                }
                 try? await Task.sleep(nanoseconds: 3_000_000_000)
             }
         }
@@ -75,8 +74,6 @@ struct EdgeGlowView: View {
     }
 
     /// Mirror stops left↔right so the glow is symmetrical.
-    /// Right side (0→0.5) gets random positions, left side (0.5→1.0)
-    /// mirrors them exactly.
     private static func randomStops() -> [Gradient.Stop] {
         var stops: [Gradient.Stop] = []
         for color in palette {

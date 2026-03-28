@@ -1,64 +1,44 @@
-import AVFoundation
+import Foundation
 import Combine
 
+/// Calls the Python backend's /agent/speak endpoint which uses ElevenLabs TTS.
+/// Audio playback happens server-side via afplay.
 final class VoiceService {
-    private let synthesizer = AVSpeechSynthesizer()
     private let settings: Settings
-    private var cancellables = Set<AnyCancellable>()
+    private let session = URLSession.shared
+    private let backendBase: String
 
-    /// Currently resolved voice — updates when settings.selectedVoiceId changes
-    private var resolvedVoice: AVSpeechSynthesisVoice?
-
-    init(settings: Settings = .shared) {
+    init(settings: Settings = .shared, backendBase: String = "http://localhost:3030") {
         self.settings = settings
-        resolvedVoice = Self.resolveVoice(id: settings.selectedVoiceId)
-
-        settings.$selectedVoiceId
-            .sink { [weak self] id in
-                self?.resolvedVoice = Self.resolveVoice(id: id)
-            }
-            .store(in: &cancellables)
+        self.backendBase = backendBase
     }
 
     func speak(_ text: String) {
         guard settings.voiceEnabled else { return }
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
 
-        if synthesizer.isSpeaking {
-            synthesizer.stopSpeaking(at: .word)
-        }
+        guard let url = URL(string: "\(backendBase)/agent/speak") else { return }
 
-        let utterance = AVSpeechUtterance(string: text)
-        utterance.voice = resolvedVoice
-        utterance.rate = AVSpeechUtteranceDefaultSpeechRate * Float(settings.voiceRate * 2)
-        utterance.volume = settings.voiceVolume
-        utterance.pitchMultiplier = 1.0
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
-        synthesizer.speak(utterance)
+        let body: [String: String] = ["text": text]
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        session.dataTask(with: request) { _, response, error in
+            if let error {
+                print("[VoiceService] ElevenLabs speak failed: \(error.localizedDescription)")
+            } else if let http = response as? HTTPURLResponse, http.statusCode != 200 {
+                print("[VoiceService] ElevenLabs speak returned \(http.statusCode)")
+            }
+        }.resume()
     }
 
     func stop() {
-        if synthesizer.isSpeaking {
-            synthesizer.stopSpeaking(at: .word)
-        }
+        // Playback is server-side — nothing to stop locally
     }
 
-    /// Available English voices for the settings picker
-    static var availableVoices: [AVSpeechSynthesisVoice] {
-        AVSpeechSynthesisVoice.speechVoices()
-            .filter { $0.language.starts(with: "en") }
-            .sorted { ($0.quality.rawValue, $0.name) > ($1.quality.rawValue, $1.name) }
-    }
-
-    private static func resolveVoice(id: String?) -> AVSpeechSynthesisVoice? {
-        let voices = AVSpeechSynthesisVoice.speechVoices()
-        if let id, let match = voices.first(where: { $0.identifier == id }) {
-            return match
-        }
-        // Auto-select best available English voice
-        return voices.first(where: {
-            $0.language.starts(with: "en") && $0.quality == .enhanced
-        }) ?? voices.first(where: {
-            $0.language.starts(with: "en") && $0.quality == .premium
-        }) ?? AVSpeechSynthesisVoice(language: "en-US")
-    }
+    // Keep for settings picker compatibility (no-op list since we use ElevenLabs now)
+    static var availableVoices: [String] { [] }
 }

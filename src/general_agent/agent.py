@@ -18,6 +18,7 @@ from typing import Any
 
 from src.general_agent.tools import ToolRegistry
 from src.storage.database import DatabaseManager
+from src.voice.tts import VoiceClient
 
 logger = logging.getLogger(__name__)
 
@@ -52,10 +53,12 @@ class GeneralAgent:
         db: DatabaseManager,
         tools: ToolRegistry,
         overlay_ws_url: str = "ws://localhost:9321",
+        voice: VoiceClient | None = None,
     ) -> None:
         self._db = db
         self._tools = tools
         self._overlay_ws_url = overlay_ws_url
+        self._voice = voice
 
         # Processing queue — events and actions arrive here via /push
         self._queue: asyncio.Queue[PushItem] = asyncio.Queue()
@@ -99,6 +102,10 @@ class GeneralAgent:
             "text": response,
         })
 
+        # Speak the response aloud
+        if self._voice:
+            asyncio.create_task(self._voice.speak(response))
+
         return response
 
     def status(self) -> dict[str, Any]:
@@ -109,6 +116,7 @@ class GeneralAgent:
             "recent_items": len(self._recent_items),
             "conversation_turns": len(self._conversation),
             "ws_connected": self._ws_connection is not None,
+            "tts_enabled": self._voice is not None,
         }
 
     # ── Main loop ──────────────────────────────────────────────
@@ -138,6 +146,8 @@ class GeneralAgent:
     async def stop(self) -> None:
         self._running = False
         await self._ws_disconnect()
+        if self._voice:
+            await self._voice.close()
 
     # ── Item processing ────────────────────────────────────────
 
@@ -172,6 +182,10 @@ class GeneralAgent:
             "type": "show_proposal",
             "text": notification,
         })
+
+        # Speak high-importance notifications aloud
+        if self._voice and importance >= 0.7:
+            asyncio.create_task(self._voice.speak(notification))
 
         self._recent_notifications.append((summary, time.time()))
         logger.info("Surfaced to overlay: %s", notification[:100])

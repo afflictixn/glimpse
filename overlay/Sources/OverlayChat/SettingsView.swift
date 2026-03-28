@@ -1,5 +1,4 @@
 import SwiftUI
-import AVFoundation
 
 struct SettingsView: View {
     @ObservedObject var settings: Settings
@@ -37,7 +36,7 @@ struct SettingsView: View {
 
     private var voiceSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            sectionLabel("Voice")
+            sectionLabel("Voice (ElevenLabs)")
 
             Toggle("Enabled", isOn: $settings.voiceEnabled)
                 .toggleStyle(.switch)
@@ -45,46 +44,11 @@ struct SettingsView: View {
                 .foregroundColor(.white.opacity(0.85))
 
             if settings.voiceEnabled {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Volume")
-                        .font(.system(size: 11))
-                        .foregroundColor(.white.opacity(0.5))
-                    Slider(value: $settings.voiceVolume, in: 0...1)
-                        .controlSize(.small)
-                }
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Speed")
-                        .font(.system(size: 11))
-                        .foregroundColor(.white.opacity(0.5))
-                    Slider(value: $settings.voiceRate, in: 0...1)
-                        .controlSize(.small)
-                }
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Voice")
-                        .font(.system(size: 11))
-                        .foregroundColor(.white.opacity(0.5))
-                    voicePicker
-                }
+                Text("Using ElevenLabs TTS via backend")
+                    .font(.system(size: 11))
+                    .foregroundColor(.white.opacity(0.4))
             }
         }
-    }
-
-    private var voicePicker: some View {
-        Picker("", selection: Binding(
-            get: { settings.selectedVoiceId ?? "" },
-            set: { settings.selectedVoiceId = $0.isEmpty ? nil : $0 }
-        )) {
-            Text("Auto (best available)")
-                .tag("")
-            ForEach(VoiceService.availableVoices, id: \.identifier) { voice in
-                Text("\(voice.name) (\(qualityLabel(voice.quality)))")
-                    .tag(voice.identifier)
-            }
-        }
-        .labelsHidden()
-        .font(.system(size: 11))
     }
 
     // MARK: - Helpers
@@ -94,13 +58,5 @@ struct SettingsView: View {
             .font(.system(size: 10, weight: .bold, design: .monospaced))
             .foregroundColor(.white.opacity(0.4))
             .tracking(1.2)
-    }
-
-    private func qualityLabel(_ quality: AVSpeechSynthesisVoiceQuality) -> String {
-        switch quality {
-        case .enhanced: return "enhanced"
-        case .premium: return "premium"
-        default: return "default"
-        }
     }
 }
