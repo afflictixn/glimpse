@@ -50,47 +50,156 @@ private func colorSwatchImage(hex: String, size: CGFloat = 11) -> NSImage? {
     return img
 }
 
-/// Build a rich `Text` that replaces hex color codes with ■ swatch + styled code.
-/// Matches #RGB, #RRGGBB, #RRGGBBAA patterns.
-private func richColorText(from content: String) -> Text {
-    let pattern = try! NSRegularExpression(pattern: "#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})\\b")
-    let nsContent = content as NSString
-    let matches = pattern.matches(in: content, range: NSRange(location: 0, length: nsContent.length))
+// MARK: - Inline Token
 
-    if matches.isEmpty {
-        return Text(content)
+struct InlineToken {
+    enum Kind {
+        case bold(String)
+        case code(String)
+        case hex(token: String, digits: String)
     }
+    let range: NSRange
+    let kind: Kind
+}
+
+/// Parse a line for `code`, **bold**, and #hex inline tokens, sorted by position.
+func inlineTokens(in text: String) -> [InlineToken] {
+    let ns = text as NSString
+    let len = ns.length
+    var tokens: [InlineToken] = []
+
+    // `code spans` (must come first — content inside backticks is handled specially)
+    let codeRe = try! NSRegularExpression(pattern: "`([^`]+)`")
+    for m in codeRe.matches(in: text, range: NSRange(0..<len)) {
+        let content = ns.substring(with: m.range(at: 1))
+        tokens.append(InlineToken(range: m.range, kind: .code(content)))
+    }
+
+    // **bold**
+    let boldRe = try! NSRegularExpression(pattern: "\\*\\*(.+?)\\*\\*")
+    for m in boldRe.matches(in: text, range: NSRange(0..<len)) {
+        tokens.append(InlineToken(range: m.range, kind: .bold(ns.substring(with: m.range(at: 1)))))
+    }
+
+    // #hex colors (bare, not inside backticks — those are caught by code span)
+    let hexRe = try! NSRegularExpression(pattern: "#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})\\b")
+    for m in hexRe.matches(in: text, range: NSRange(0..<len)) {
+        let tok = ns.substring(with: m.range)
+        tokens.append(InlineToken(range: m.range, kind: .hex(token: tok, digits: String(tok.dropFirst()))))
+    }
+
+    // Sort by position, then deduplicate overlapping (keep earliest)
+    tokens.sort { $0.range.location < $1.range.location }
+    return tokens
+}
+
+/// Regex to check if a string is purely a hex color like #FF8C00
+private let hexOnlyRe = try! NSRegularExpression(pattern: "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$")
+
+/// Build a `Text` from a single line, rendering `code`, **bold**, and #hex inline.
+func parseInline(_ text: String, compact: Bool = false) -> Text {
+    let ns = text as NSString
+    let tokens = inlineTokens(in: text)
+    if tokens.isEmpty { return Text(text) }
+
+    let hexFontSize: CGFloat = compact ? 10 : 12
+    let codeFontSize: CGFloat = compact ? 10 : 12
+    let swatchSize: CGFloat = compact ? 9 : 11
 
     var result = Text("")
     var cursor = 0
 
-    for match in matches {
-        let matchRange = match.range
-        // Append text before the match
-        if matchRange.location > cursor {
-            let before = nsContent.substring(with: NSRange(location: cursor, length: matchRange.location - cursor))
-            result = result + Text(before)
-        }
-        let hexToken = nsContent.substring(with: matchRange) // e.g. "#FF5636"
-        let hexDigits = String(hexToken.dropFirst())          // e.g. "FF5636"
+    for token in tokens {
+        if token.range.location < cursor { continue } // skip overlapping
 
-        if let swatch = colorSwatchImage(hex: hexDigits) {
-            result = result
-                + Text(Image(nsImage: swatch)).baselineOffset(-1)
-                + Text(" ")
-                + Text(hexToken)
-                    .font(.system(size: 12, weight: .medium, design: .monospaced))
-                    .foregroundColor(Color(nsColor: nsColor(fromHex: hexDigits)!))
-        } else {
-            result = result + Text(hexToken)
+        if token.range.location > cursor {
+            let plain = ns.substring(with: NSRange(cursor..<token.range.location))
+            result = result + Text(plain)
         }
-        cursor = matchRange.location + matchRange.length
+
+        switch token.kind {
+        case .bold(let inner):
+            result = result + Text(inner).bold()
+
+        case .code(let content):
+            // If the code span is a hex color, render as swatch
+            let trimmed = content.trimmingCharacters(in: .whitespaces)
+            if hexOnlyRe.firstMatch(in: trimmed, range: NSRange(0..<trimmed.utf16.count)) != nil {
+                let digits = String(trimmed.dropFirst())
+                if let swatch = colorSwatchImage(hex: digits, size: swatchSize) {
+                    result = result
+                        + Text(Image(nsImage: swatch)).baselineOffset(-1)
+                        + Text(trimmed)
+                            .font(.system(size: hexFontSize, weight: .medium, design: .monospaced))
+                            .foregroundColor(Color(nsColor: nsColor(fromHex: digits)!))
+                } else {
+                    result = result + Text(content)
+                        .font(.system(size: codeFontSize, design: .monospaced))
+                }
+            } else {
+                result = result + Text(content)
+                    .font(.system(size: codeFontSize, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.7))
+            }
+
+        case .hex(let tok, let digits):
+            if let swatch = colorSwatchImage(hex: digits, size: swatchSize) {
+                result = result
+                    + Text(Image(nsImage: swatch)).baselineOffset(-1)
+                    + Text(tok)
+                        .font(.system(size: hexFontSize, weight: .medium, design: .monospaced))
+                        .foregroundColor(Color(nsColor: nsColor(fromHex: digits)!))
+            } else {
+                result = result + Text(tok)
+            }
+        }
+        cursor = token.range.location + token.range.length
     }
 
-    // Append any trailing text
-    if cursor < nsContent.length {
-        let trailing = nsContent.substring(from: cursor)
-        result = result + Text(trailing)
+    if cursor < ns.length {
+        result = result + Text(ns.substring(from: cursor))
+    }
+    return result
+}
+
+/// Build rich `Text` from message content — headers, bullets, bold, code, and hex swatches.
+func richText(from content: String, compact: Bool = false) -> Text {
+    let lines = content.components(separatedBy: "\n")
+    var result = Text("")
+
+    let h1: CGFloat = compact ? 13 : 17
+    let h2: CGFloat = compact ? 12 : 15
+    let h3: CGFloat = compact ? 11 : 13
+
+    for (i, line) in lines.enumerated() {
+        if i > 0 { result = result + Text("\n") }
+
+        // Detect markdown header prefix
+        var headerLevel = 0
+        var body = line
+        if line.hasPrefix("### ")      { headerLevel = 3; body = String(line.dropFirst(4)) }
+        else if line.hasPrefix("## ")   { headerLevel = 2; body = String(line.dropFirst(3)) }
+        else if line.hasPrefix("# ")    { headerLevel = 1; body = String(line.dropFirst(2)) }
+
+        // Detect bullet points: * or -
+        var bullet = false
+        if headerLevel == 0 {
+            if body.hasPrefix("* ") || body.hasPrefix("- ") {
+                bullet = true
+                body = String(body.dropFirst(2))
+            }
+        }
+
+        if bullet { result = result + Text("  \u{2022} ") }
+
+        let parsed = parseInline(body, compact: compact)
+
+        switch headerLevel {
+        case 1:  result = result + parsed.font(.system(size: h1, weight: .bold))
+        case 2:  result = result + parsed.font(.system(size: h2, weight: .bold))
+        case 3:  result = result + parsed.font(.system(size: h3, weight: .semibold))
+        default: result = result + parsed
+        }
     }
 
     return result
@@ -182,7 +291,7 @@ struct MessageBubble: View {
                     }
 
                     if !message.content.isEmpty {
-                        richColorText(from: message.content)
+                        richText(from: message.content)
                             .textSelection(.enabled)
                             .foregroundColor(.white.opacity(isUser ? 0.9 : 0.8))
                             .padding(.horizontal, 12)

@@ -3,6 +3,8 @@ import SwiftUI
 struct FloatingOverlayView: View {
     @ObservedObject var state: OverlayState
     @ObservedObject var viewModel: ChatViewModel
+    @ObservedObject var settings: Settings
+    @State private var showSettings: Bool = false
     @State private var inactivityTask: Task<Void, Never>?
 
     /// Scale with screen: ~300 on 13", ~340 on 14", ~380 on 16"
@@ -15,9 +17,15 @@ struct FloatingOverlayView: View {
         VStack(spacing: 0) {
             header
             Divider().overlay(Color.white.opacity(0.15))
-            recentMessages
-            Divider().overlay(Color.white.opacity(0.15))
-            compactInput
+
+            if showSettings {
+                SettingsView(settings: settings)
+                    .frame(maxHeight: 200)
+            } else {
+                recentMessages
+                Divider().overlay(Color.white.opacity(0.15))
+                compactInput
+            }
         }
         .frame(width: Self.responsiveWidth)
         .background(Color.black.opacity(0.3))
@@ -43,6 +51,17 @@ struct FloatingOverlayView: View {
                 .foregroundColor(.white)
 
             Spacer()
+
+            Button(action: { withAnimation(.easeInOut(duration: 0.15)) { showSettings.toggle() } }) {
+                Image(systemName: showSettings ? "chevron.left" : "gearshape")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.white.opacity(0.85))
+                    .frame(width: 28, height: 28)
+                    .background(Color.white.opacity(0.08))
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .help(showSettings ? "Back to chat" : "Settings")
 
             Button(action: { state.expandToFullPanel() }) {
                 Image(systemName: "arrow.up.left.and.arrow.down.right")
@@ -110,7 +129,7 @@ struct FloatingOverlayView: View {
         HStack {
             if message.role == .user { Spacer(minLength: 40) }
 
-            Text(message.content)
+            richText(from: message.content, compact: true)
                 .font(.system(size: 11))
                 .foregroundColor(.white.opacity(message.role == .user ? 0.9 : 0.75))
                 .lineLimit(nil)
