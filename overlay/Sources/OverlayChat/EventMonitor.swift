@@ -13,6 +13,8 @@ enum CaptureTrigger: String {
 
 /// Monitors keyboard, mouse, and app-switch events. Detects typing pauses, idle, and clipboard shortcuts.
 /// Replaces Python's EventTap + ActivityFeed.
+/// Uses Carbon RegisterEventHotKey for Cmd+Shift+O — this does NOT require Accessibility permission,
+/// so the hotkey works even when the binary changes and macOS revokes Accessibility.
 final class EventMonitor {
     var onTrigger: ((CaptureTrigger) -> Void)?
     var onHotkey: (() -> Void)?
@@ -20,6 +22,8 @@ final class EventMonitor {
     private var globalMonitor: Any?
     private var localMonitor: Any?
     private var workspaceObserver: NSObjectProtocol?
+    private var hotKeyRef: EventHotKeyRef?
+    private var carbonHandlerRef: EventHandlerRef?
 
     private let typingPauseDelayMs: Double
     private let idleIntervalMs: Double
@@ -32,6 +36,9 @@ final class EventMonitor {
 
     private let lock = NSLock()
 
+    /// Global static ref so the C callback can reach us
+    private static weak var shared: EventMonitor?
+
     init(typingPauseDelayMs: Double = 500, idleIntervalMs: Double = 30_000) {
         self.typingPauseDelayMs = typingPauseDelayMs
         self.idleIntervalMs = idleIntervalMs
@@ -41,6 +48,10 @@ final class EventMonitor {
         let now = ProcessInfo.processInfo.systemUptime
         lastActivityTime = now
         lastKeyboardTime = 0
+        EventMonitor.shared = self
+
+        // --- Carbon hotkey: Cmd+Shift+O (no Accessibility permission needed) ---
+        registerCarbonHotkey()
 
         // Global monitor for events when our app is NOT focused
         globalMonitor = NSEvent.addGlobalMonitorForEvents(
@@ -53,10 +64,7 @@ final class EventMonitor {
         localMonitor = NSEvent.addLocalMonitorForEvents(
             matching: [.keyDown, .keyUp, .leftMouseDown, .rightMouseDown, .mouseMoved, .scrollWheel]
         ) { [weak self] event in
-            // Return nil to consume hotkey events
-            if self?.handleEvent(event) == true {
-                return nil
-            }
+            self?.handleEvent(event)
             return event
         }
 
@@ -77,7 +85,53 @@ final class EventMonitor {
         print("[zexp] EventMonitor started")
     }
 
+    // MARK: - Carbon Global Hotkey (works without Accessibility permission)
+
+    private func registerCarbonHotkey() {
+        // C callback — must be a plain function, no captures
+        let handler: EventHandlerUPP = { _, event, _ -> OSStatus in
+            DispatchQueue.main.async {
+                print("[zexp] hotkey Cmd+Shift+O detected (Carbon)")
+                EventMonitor.shared?.onHotkey?()
+            }
+            return noErr
+        }
+
+        var eventType = EventTypeSpec(
+            eventClass: OSType(kEventClassKeyboard),
+            eventKind: UInt32(kEventHotKeyPressed)
+        )
+
+        InstallEventHandler(
+            GetApplicationEventTarget(),
+            handler,
+            1,
+            &eventType,
+            nil,
+            &carbonHandlerRef
+        )
+
+        // Cmd=0x100, Shift=0x200 → cmdKey | shiftKey
+        let hotKeyID = EventHotKeyID(signature: OSType(0x5A455850), id: 1) // "ZEXP"
+        let status = RegisterEventHotKey(
+            UInt32(kVK_ANSI_O),
+            UInt32(cmdKey | shiftKey),
+            hotKeyID,
+            GetApplicationEventTarget(),
+            0,
+            &hotKeyRef
+        )
+
+        if status == noErr {
+            print("[zexp] Carbon hotkey registered: Cmd+Shift+O")
+        } else {
+            print("[zexp] Carbon hotkey registration failed: \(status)")
+        }
+    }
+
     func stop() {
+        if let ref = hotKeyRef { UnregisterEventHotKey(ref) }
+        if let ref = carbonHandlerRef { RemoveEventHandler(ref) }
         if let m = globalMonitor { NSEvent.removeMonitor(m) }
         if let m = localMonitor { NSEvent.removeMonitor(m) }
         if let obs = workspaceObserver {
@@ -85,16 +139,17 @@ final class EventMonitor {
         }
         typingPauseTimer?.invalidate()
         idleTimer?.invalidate()
+        hotKeyRef = nil
+        carbonHandlerRef = nil
         globalMonitor = nil
         localMonitor = nil
         workspaceObserver = nil
+        EventMonitor.shared = nil
     }
 
     // MARK: - Event Handling
 
-    /// Returns true if the event was a hotkey (should be consumed by local monitor).
-    @discardableResult
-    private func handleEvent(_ event: NSEvent) -> Bool {
+    private func handleEvent(_ event: NSEvent) {
         switch event.type {
         case .leftMouseDown, .rightMouseDown:
             recordActivity()
@@ -103,17 +158,6 @@ final class EventMonitor {
         case .keyDown:
             recordActivity()
             recordKeyboard()
-
-            // Check for Cmd+Shift+O hotkey
-            let required: NSEvent.ModifierFlags = [.command, .shift]
-            if event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(required),
-               event.keyCode == 0x1F {
-                print("[zexp] hotkey Cmd+Shift+O detected")
-                DispatchQueue.main.async { [weak self] in
-                    self?.onHotkey?()
-                }
-                return true
-            }
 
             // Check for clipboard shortcuts (Cmd+C/X/V)
             if event.modifierFlags.contains(.command) {
@@ -133,7 +177,6 @@ final class EventMonitor {
         default:
             break
         }
-        return false
     }
 
     private func recordActivity() {
