@@ -33,12 +33,17 @@ class GeminiClient:
         if system_instruction:
             config_kwargs["system_instruction"] = system_instruction
 
+        tools_list: list[gtypes.Tool] = [
+            gtypes.Tool(google_search=gtypes.GoogleSearch()),
+        ]
         if tools:
-            config_kwargs["tools"] = [
-                gtypes.Tool(function_declarations=[
-                    self._to_gemini_func(t) for t in tools
-                ])
-            ]
+            tools_list.append(gtypes.Tool(function_declarations=[
+                self._to_gemini_func(t) for t in tools
+            ]))
+        config_kwargs["tools"] = tools_list
+        config_kwargs["tool_config"] = gtypes.ToolConfig(
+            include_server_side_tool_invocations=True,
+        )
 
         config = gtypes.GenerateContentConfig(**config_kwargs)
 
@@ -133,8 +138,39 @@ class GeminiClient:
                     arguments=dict(fc.args) if fc.args else {},
                 ))
 
+        citations = _extract_citations(candidate)
+        if citations:
+            text_parts.append(citations)
+
         return Message(
             role="assistant",
             content="\n".join(text_parts),
             tool_calls=tool_calls,
         )
+
+
+def _extract_citations(candidate: Any) -> str:
+    """Build a sources footer from grounding metadata, if present."""
+    metadata = getattr(candidate, "grounding_metadata", None)
+    if not metadata:
+        return ""
+    chunks = getattr(metadata, "grounding_chunks", None)
+    if not chunks:
+        return ""
+
+    seen: set[str] = set()
+    lines: list[str] = []
+    for chunk in chunks:
+        web = getattr(chunk, "web", None)
+        if not web:
+            continue
+        uri = getattr(web, "uri", "")
+        title = getattr(web, "title", "")
+        if uri and uri not in seen:
+            seen.add(uri)
+            label = title or uri
+            lines.append(f"- [{label}]({uri})")
+
+    if not lines:
+        return ""
+    return "\n\nSources:\n" + "\n".join(lines)

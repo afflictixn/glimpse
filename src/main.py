@@ -41,8 +41,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ollama-url", type=str, default="http://localhost:11434", help="Ollama server base URL")
     parser.add_argument("--include-ocr", action="store_true", help="Include OCR text in Gemma agent prompt")
     parser.add_argument("--overlay-ws-url", type=str, default="ws://localhost:9321", help="Overlay WebSocket URL")
-    parser.add_argument("--llm-provider", type=str, default="openai", help="LLM provider: openai or gemini")
-    parser.add_argument("--llm-model", type=str, default="gpt-4o-mini", help="LLM model name")
+    parser.add_argument("--llm-provider", type=str, default="gemini", help="LLM provider: openai or gemini")
+    parser.add_argument("--llm-model", type=str, default="gemini-3-flash-preview", help="LLM model name")
     return parser.parse_args()
 
 

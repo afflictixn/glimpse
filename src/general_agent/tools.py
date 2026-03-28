@@ -64,32 +64,6 @@ class ToolRegistry:
         ))
         self.register(RegisteredTool(
             spec=ToolSpec(
-                name="web_search",
-                description=(
-                    "Search the web for information. Returns a summary of top results. "
-                    "Use for price checks, fact verification, looking up people/companies, etc."
-                ),
-                parameters={
-                    "query": "Search query string",
-                },
-            ),
-            fn=self._web_search,
-        ))
-        self.register(RegisteredTool(
-            spec=ToolSpec(
-                name="price_lookup",
-                description=(
-                    "Look up current prices for a product across sources. "
-                    "Returns price comparisons when available."
-                ),
-                parameters={
-                    "product": "Product name or description to look up",
-                },
-            ),
-            fn=self._price_lookup,
-        ))
-        self.register(RegisteredTool(
-            spec=ToolSpec(
                 name="contact_lookup",
                 description=(
                     "Look up context about a person from Glimpse event history — "
@@ -141,20 +115,6 @@ class ToolRegistry:
     async def _db_raw_sql(self, sql: str = "", limit: str = "20") -> str:
         rows = await self._db.execute_raw_sql(sql, limit=min(int(limit), 100))
         return json.dumps(rows, default=str)
-
-    async def _web_search(self, query: str = "") -> str:
-        logger.info("web_search called: %s", query)
-        return json.dumps({
-            "note": "Web search not yet connected to a provider. Wire a search API (SerpAPI, Brave Search, etc.) here.",
-            "query": query,
-        })
-
-    async def _price_lookup(self, product: str = "") -> str:
-        logger.info("price_lookup called: %s", product)
-        return json.dumps({
-            "note": "Price lookup not yet connected to a provider.",
-            "product": product,
-        })
 
     async def _contact_lookup(self, name: str = "") -> str:
         ocr_hits = await self._db.search(name, limit=5)
