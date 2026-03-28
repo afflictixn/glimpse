@@ -73,17 +73,23 @@ final class WebSocketServer {
     }
 
     private func recv(_ connection: NWConnection) {
-        connection.receiveMessage { [weak self] content, context, _, error in
+        connection.receiveMessage { [weak self] content, context, isComplete, error in
             if let error {
-                print("[ws] recv error: \(error)")
-                return
+                let nwErr = error as NSError
+                let isEOF = nwErr.domain == "NSPOSIXErrorDomain" && nwErr.code == 57 // ENOTCONN
+                if isEOF || connection.state == .cancelled || connection.state != .ready {
+                    print("[ws] recv: connection gone (\(error))")
+                    return
+                }
+                print("[ws] recv error (continuing): \(error)")
             }
+
             if let data = content, self?.isWebSocketText(context) == true,
                let msg = InboundMessage(from: data) {
-                DispatchQueue.main.async {
-                    self?.onMessage?(msg)
-                }
+                self?.onMessage?(msg)
             }
+
+            guard connection.state == .ready else { return }
             self?.recv(connection)
         }
     }

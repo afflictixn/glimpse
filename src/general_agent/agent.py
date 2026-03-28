@@ -346,29 +346,68 @@ class GeneralAgent:
 
     # ── WebSocket to overlay ───────────────────────────────────
 
-    async def _ws_send(self, message: dict[str, Any]) -> None:
-        """Send a JSON message to the overlay via WebSocket."""
+    _WS_SEND_RETRIES = 2
+    _WS_CONNECT_TIMEOUT = 5
+
+    async def _ws_ensure_connected(self) -> None:
+        """Establish (or re-establish) the overlay WebSocket connection.
+
+        Must be called while holding ``_ws_lock``.
+        """
         import websockets
 
-        async with self._ws_lock:
-            try:
-                if self._ws_connection is None:
-                    self._ws_connection = await websockets.connect(self._overlay_ws_url)
-                    logger.info("Connected to overlay WebSocket at %s", self._overlay_ws_url)
+        if self._ws_connection is not None:
+            return
 
-                await self._ws_connection.send(json.dumps(message))
+        self._ws_connection = await asyncio.wait_for(
+            websockets.connect(
+                self._overlay_ws_url,
+                ping_interval=20,
+                ping_timeout=10,
+                close_timeout=5,
+            ),
+            timeout=self._WS_CONNECT_TIMEOUT,
+        )
+        logger.info("Connected to overlay WebSocket at %s", self._overlay_ws_url)
+
+    async def _ws_close_connection(self) -> None:
+        """Close the current connection (if any) without acquiring the lock."""
+        if self._ws_connection is not None:
+            try:
+                await self._ws_connection.close()
             except Exception:
-                logger.debug("WebSocket send failed, will reconnect next time", exc_info=True)
-                self._ws_connection = None
+                pass
+            self._ws_connection = None
+
+    async def _ws_send(self, message: dict[str, Any]) -> None:
+        """Send a JSON message to the overlay via WebSocket.
+
+        Retries once with a fresh connection on failure so that transient
+        disconnects (overlay restart, stale socket) don't silently drop
+        messages.
+        """
+        payload = json.dumps(message)
+
+        async with self._ws_lock:
+            for attempt in range(1, self._WS_SEND_RETRIES + 1):
+                try:
+                    await self._ws_ensure_connected()
+                    await self._ws_connection.send(payload)
+                    return
+                except Exception:
+                    await self._ws_close_connection()
+                    if attempt < self._WS_SEND_RETRIES:
+                        logger.debug("WebSocket send failed (attempt %d), reconnecting", attempt)
+                    else:
+                        logger.warning(
+                            "WebSocket send failed after %d attempts, message dropped: %s",
+                            self._WS_SEND_RETRIES,
+                            message.get("type", "?"),
+                        )
 
     async def _ws_disconnect(self) -> None:
         async with self._ws_lock:
-            if self._ws_connection is not None:
-                try:
-                    await self._ws_connection.close()
-                except Exception:
-                    pass
-                self._ws_connection = None
+            await self._ws_close_connection()
 
     # ── WebSocket listener (overlay → agent) ───────────────────
 
