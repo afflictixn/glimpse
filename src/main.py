@@ -1,0 +1,164 @@
+from __future__ import annotations
+
+import argparse
+import asyncio
+import logging
+import signal
+import sys
+from pathlib import Path
+
+import uvicorn
+
+from src.api.server import create_app
+from src.capture.activity_feed import ActivityFeed
+from src.capture.event_tap import CaptureTrigger, EventTap
+from src.capture.triggers import CaptureLoop
+from src.config import Settings, set_settings
+from src.intelligence.intelligence_layer import IntelligenceLayer
+from src.process.process_agent import NoOpAgent, ProcessAgent
+from src.context.context_provider import ContextProvider
+from src.intelligence.reasoning_agent import ReasoningAgent
+from src.storage.database import DatabaseManager
+from src.storage.snapshot_writer import SnapshotWriter
+
+logger = logging.getLogger("glimpse")
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Glimpse - macOS screenshot capture & intelligence")
+    parser.add_argument("--port", type=int, default=3030, help="API server port")
+    parser.add_argument("--data-dir", type=str, default=str(Path.home() / ".glimpse"), help="Data directory")
+    parser.add_argument("--jpeg-quality", type=int, default=80, help="JPEG quality (1-100)")
+    parser.add_argument("--retention-days", type=int, default=7, help="Data retention in days")
+    parser.add_argument("--max-db-size-mb", type=int, default=10_000, help="Max database size in MB")
+    parser.add_argument("--log-level", type=str, default="INFO", help="Logging level")
+    return parser.parse_args()
+
+
+async def cleanup_task(db: DatabaseManager, interval_hours: int) -> None:
+    interval_s = interval_hours * 3600
+    while True:
+        try:
+            await asyncio.sleep(interval_s)
+            deleted = await db.cleanup()
+            if deleted > 0:
+                logger.info("Retention cleanup removed %d frames", deleted)
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            logger.error("Cleanup task error", exc_info=True)
+
+
+async def run(settings: Settings) -> None:
+    set_settings(settings)
+    settings.ensure_dirs()
+
+    db = DatabaseManager(settings)
+    await db.initialize()
+
+    process_agents: list[ProcessAgent] = [NoOpAgent()]
+    context_providers: list[ContextProvider] = []
+    reasoning_agents: list[ReasoningAgent] = []
+
+    intelligence = IntelligenceLayer(agents=reasoning_agents, db=db)
+
+    trigger_queue: asyncio.Queue[CaptureTrigger] = asyncio.Queue()
+    loop = asyncio.get_running_loop()
+
+    activity_feed = ActivityFeed(
+        typing_pause_delay_ms=settings.typing_pause_delay_ms,
+        idle_capture_interval_ms=settings.idle_capture_interval_ms,
+    )
+
+    event_tap = EventTap(
+        trigger_queue=trigger_queue,
+        loop=loop,
+        activity_callback=activity_feed.record,
+    )
+
+    snapshot_writer = SnapshotWriter(settings)
+
+    capture_loop = CaptureLoop(
+        settings=settings,
+        db=db,
+        snapshot_writer=snapshot_writer,
+        trigger_queue=trigger_queue,
+        activity_feed=activity_feed,
+        process_agents=process_agents,
+        context_providers=context_providers,
+        intelligence_layer=intelligence,
+    )
+
+    app = create_app(db)
+
+    config = uvicorn.Config(
+        app,
+        host="0.0.0.0",
+        port=settings.port,
+        log_level="info",
+        access_log=False,
+    )
+    server = uvicorn.Server(config)
+
+    shutdown_event = asyncio.Event()
+
+    def handle_signal() -> None:
+        logger.info("Shutdown signal received")
+        shutdown_event.set()
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, handle_signal)
+
+    server_task = asyncio.create_task(server.serve())
+    event_tap.start()
+    capture_task = asyncio.create_task(capture_loop.run())
+    intelligence_task = asyncio.create_task(intelligence.run())
+    cleanup = asyncio.create_task(
+        cleanup_task(db, settings.cleanup_interval_hours)
+    )
+
+    logger.info("Glimpse started on port %d, data dir: %s", settings.port, settings.data_dir)
+
+    await shutdown_event.wait()
+
+    logger.info("Shutting down...")
+    await capture_loop.stop()
+    await intelligence.stop()
+    server.should_exit = True
+    capture_task.cancel()
+    intelligence_task.cancel()
+    cleanup.cancel()
+
+    for t in (capture_task, intelligence_task, cleanup, server_task):
+        try:
+            await t
+        except asyncio.CancelledError:
+            pass
+
+    event_tap.stop()
+    await db.close()
+    logger.info("Glimpse stopped")
+
+
+def main() -> None:
+    args = parse_args()
+
+    logging.basicConfig(
+        level=getattr(logging, args.log_level.upper(), logging.INFO),
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
+    settings = Settings(
+        port=args.port,
+        data_dir=Path(args.data_dir),
+        jpeg_quality=args.jpeg_quality,
+        max_retention_days=args.retention_days,
+        max_db_size_mb=args.max_db_size_mb,
+    )
+
+    asyncio.run(run(settings))
+
+
+if __name__ == "__main__":
+    main()
