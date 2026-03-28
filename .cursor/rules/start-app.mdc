@@ -1,0 +1,24 @@
+---
+description: How to start, stop, and monitor the Z Exp (Glimpse) app
+alwaysApply: true
+---
+
+# Starting the App
+
+When asked to start, launch, or run the app:
+
+1. Run `./start.sh` from the project root (backgrounded with `block_until_ms: 0`)
+2. Wait 5 seconds, then read the output to confirm all services started
+3. Check for these success indicators:
+   - Ollama: `✓ Ollama already running` or `✓ Ollama started`
+   - Overlay: `✓ Overlay started`
+   - Backend: `✓ Z Exp backend started (port 3030)`
+4. If any service failed, read its log file:
+   - Overlay: `/tmp/zexp-overlay.log` and `/tmp/zexp-overlay-build.log`
+   - Backend: `/tmp/zexp-backend.log`
+
+When asked to stop the app, run `./start.sh --kill`.
+
+When asked to restart a specific service, run `./start.sh --restart <service>` where service is `overlay`, `backend`, or `ollama`.
+
+**Important**: Always activate conda first with `conda_ai` before running `start.sh`.

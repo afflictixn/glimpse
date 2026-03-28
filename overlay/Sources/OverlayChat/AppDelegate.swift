@@ -48,7 +48,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Startup demo
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
-            self?.overlayState.handleProposal(text: "z is alive", importance: .medium)
+            self?.overlayState.handleProposal(text: "z is alive")
         }
     }
 
@@ -273,7 +273,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // Also feed to overlay state for edge glow + voice
                 switch message {
                 case .showProposal(let text, _):
-                    self.overlayState.handleProposal(text: text, importance: .medium)
+                    self.overlayState.handleProposal(text: text)
                 case .showConversation, .appendConversation:
                     break // these go straight to chat
                 case .hide:
@@ -356,7 +356,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func demoSuggestion() {
-        overlayState.handleProposal(text: "This product is $14 cheaper on Amazon", importance: .medium)
+        overlayState.handleProposal(text: "This product is $14 cheaper on Amazon")
     }
 
     @objc private func demoWarning() {
@@ -364,7 +364,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func demoExcited() {
-        overlayState.handleProposal(text: "That Airbnb you liked in Lisbon dropped 30%", importance: .high)
+        overlayState.handleProposal(text: "That Airbnb you liked in Lisbon dropped 30%")
         overlayState.mode = .excited
     }
 

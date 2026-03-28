@@ -117,8 +117,7 @@ final class ChatViewModel: ObservableObject {
         case .showProposal(let text, let proposalId):
             currentSuggestion = ProactiveSuggestion(
                 text: text,
-                proposalId: proposalId,
-                importance: .medium
+                proposalId: proposalId
             )
         case .showConversation(let text):
             currentSuggestion = nil
@@ -164,10 +163,5 @@ struct ProactiveSuggestion: Identifiable {
     let id = UUID()
     let text: String
     let proposalId: Int?
-    let importance: Importance
     let timestamp = Date()
-
-    enum Importance {
-        case low, medium, high
-    }
 }

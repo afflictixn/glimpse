@@ -6,7 +6,6 @@ final class OverlayState: ObservableObject {
         case idle           // slow calm pulse
         case suggestion     // gentle warm shimmer
         case excited        // quick double-pulse — "you're going to like this"
-        case important      // sustained bright glow
         case warning        // sharp flash + hold
         case hidden         // deep focus — fade to almost nothing
     }
@@ -37,7 +36,6 @@ final class OverlayState: ObservableObject {
         case .idle:       return 0.02
         case .suggestion: return 0.30
         case .excited:    return 0.40
-        case .important:  return 0.55
         case .warning:    return 0.65
         case .hidden:     return 0.0
         }
@@ -48,7 +46,6 @@ final class OverlayState: ObservableObject {
         case .idle:       return 0.02
         case .suggestion: return 0.20
         case .excited:    return 0.30
-        case .important:  return 0.10
         case .warning:    return 0.15
         case .hidden:     return 0.0
         }
@@ -59,7 +56,6 @@ final class OverlayState: ObservableObject {
         case .idle:       return 0.2
         case .suggestion: return 1.0
         case .excited:    return 3.0
-        case .important:  return 0.5
         case .warning:    return 2.0
         case .hidden:     return 0.0
         }
@@ -90,7 +86,7 @@ final class OverlayState: ObservableObject {
 
     // MARK: - Bridge from WebSocket proposals
 
-    func handleProposal(text: String, importance: ProactiveSuggestion.Importance) {
+    func handleProposal(text: String) {
         currentSuggestion = text
         modeChangedAt = Date().timeIntervalSinceReferenceDate
         switch importance {

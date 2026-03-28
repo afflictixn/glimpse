@@ -18,9 +18,11 @@ from PIL import Image
 
 from src.process.gemma_agent import GemmaAgent
 from src.storage.models import AppType, Event
+from src.config import Settings
 
-OLLAMA_URL = "http://localhost:11434"
-MODEL = "gemma3:12b"
+_DEFAULTS = Settings()
+OLLAMA_URL = _DEFAULTS.ollama_base_url
+MODEL = _DEFAULTS.ollama_model
 
 
 def _ollama_reachable() -> bool:
@@ -72,7 +74,7 @@ class TestGemmaAgentLive:
 
         assert event is not None, "Agent returned None — Ollama may have failed"
         assert isinstance(event, Event)
-        assert event.agent_name == "gemma"
+        assert event.agent_name == "gemma3"
         assert event.app_type != ""
         assert event.summary != ""
         print(f"\n  app_type : {event.app_type}")
@@ -98,7 +100,7 @@ class TestGemmaAgentLive:
 
         assert event is not None
         assert isinstance(event, Event)
-        assert event.agent_name == "gemma"
+        assert event.agent_name == "gemma3"
         assert event.summary != ""
         print(f"\n  app_type : {event.app_type}")
         print(f"  summary  : {event.summary}")
@@ -160,13 +162,15 @@ class TestGemmaAgentUnit:
         assert event.summary == "Editing code"
         assert event.metadata == {"language": "python"}
 
-    def test_parse_fenced_json(self):
+    def test_parse_fenced_json_falls_back(self):
+        """Structured output means we no longer strip markdown fences."""
         agent = GemmaAgent()
         event = agent._parse_response(
             '```json\n{"app_type": "browser", "summary": "Browsing web"}\n```'
         )
         assert event is not None
-        assert event.app_type is AppType.BROWSER
+        assert event.app_type is AppType.OTHER
+        assert "```" in event.summary
 
     def test_parse_invalid_json_fallback(self):
         agent = GemmaAgent()
@@ -183,23 +187,25 @@ class TestGemmaAgentUnit:
         assert event is not None
         assert event.app_type is AppType.OTHER
 
-    def test_coerce_app_type_values(self):
-        assert GemmaAgent._coerce_app_type("browser") is AppType.BROWSER
-        assert GemmaAgent._coerce_app_type("TERMINAL") is AppType.TERMINAL
-        assert GemmaAgent._coerce_app_type("IDE") is AppType.IDE
-        assert GemmaAgent._coerce_app_type("other") is AppType.OTHER
-        assert GemmaAgent._coerce_app_type("chat") is AppType.OTHER
-
     def test_encode_image_returns_base64(self):
+        agent = GemmaAgent()
         img = Image.new("RGB", (100, 100), (255, 0, 0))
-        b64 = GemmaAgent._encode_image(img)
+        b64 = agent._encode_image(img)
         assert isinstance(b64, str)
         assert len(b64) > 100
 
     def test_encode_rgba_image(self):
+        agent = GemmaAgent()
         img = Image.new("RGBA", (100, 100), (255, 0, 0, 128))
-        b64 = GemmaAgent._encode_image(img)
+        b64 = agent._encode_image(img)
         assert isinstance(b64, str)
+
+    def test_encode_image_downscales(self):
+        agent = GemmaAgent(max_image_width=200)
+        img = Image.new("RGB", (400, 300), (255, 0, 0))
+        b64 = agent._encode_image(img)
+        assert isinstance(b64, str)
+        assert len(b64) > 50
 
     @pytest.mark.asyncio
     async def test_unreachable_ollama_returns_none(self):

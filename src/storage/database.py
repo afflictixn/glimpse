@@ -535,9 +535,19 @@ class DatabaseManager:
             await self._conn.commit()
             return row_id  # type: ignore[return-value]
 
+    @staticmethod
+    def _sanitize_fts_query(query: str) -> str:
+        """Quote each token so FTS5 special chars (dots, dashes, etc.) are treated as literals."""
+        tokens = query.split()
+        return " ".join(f'"{t}"' for t in tokens if t)
+
     async def search_memory(
         self, query: str, entity_type: str | None = None, limit: int = 20,
     ) -> list[dict]:
+        if query:
+            fts_query = self._sanitize_fts_query(query)
+            if not fts_query:
+                query = ""
         if query:
             sql = (
                 "SELECT m.id, m.entity_type, m.entity_name, m.fact, m.source, "
@@ -546,7 +556,7 @@ class DatabaseManager:
                 "JOIN memory m ON m.id = fts.rowid "
                 "WHERE memory_fts MATCH ?"
             )
-            params: list = [query]
+            params: list = [fts_query]
         else:
             sql = (
                 "SELECT id, entity_type, entity_name, fact, source, "

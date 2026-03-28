@@ -19,6 +19,7 @@ from src.general_agent.tools import ToolRegistry
 from src.llm import create_llm_client
 from src.intelligence.intelligence_layer import IntelligenceLayer
 from src.intelligence.critique_agent import CritiqueReasoningAgent
+from src.intelligence.presentation_critique_agent import PresentationCritiqueAgent
 from src.process.browser_content_agent import BrowserContentAgent
 from src.process.gemma_agent import GemmaAgent
 from src.process.process_agent import ProcessAgent
@@ -31,22 +32,25 @@ from src.voice.tts import VoiceClient
 
 logger = logging.getLogger("zexp")
 
+_DEFAULTS = Settings()
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Z Exp - macOS screenshot capture & intelligence")
-    parser.add_argument("--port", type=int, default=3030, help="API server port")
-    parser.add_argument("--data-dir", type=str, default=str(Path.home() / ".zexp"), help="Data directory")
-    parser.add_argument("--jpeg-quality", type=int, default=80, help="JPEG quality (1-100)")
-    parser.add_argument("--retention-days", type=int, default=7, help="Data retention in days")
-    parser.add_argument("--max-db-size-mb", type=int, default=10_000, help="Max database size in MB")
+    parser.add_argument("--port", type=int, default=_DEFAULTS.port, help="API server port")
+    parser.add_argument("--data-dir", type=str, default=str(_DEFAULTS.data_dir), help="Data directory")
+    parser.add_argument("--jpeg-quality", type=int, default=_DEFAULTS.jpeg_quality, help="JPEG quality (1-100)")
+    parser.add_argument("--retention-days", type=int, default=_DEFAULTS.max_retention_days, help="Data retention in days")
+    parser.add_argument("--max-db-size-mb", type=int, default=_DEFAULTS.max_db_size_mb, help="Max database size in MB")
     parser.add_argument("--log-level", type=str, default="INFO", help="Logging level")
     parser.add_argument("--debug", action="store_true", help="Enable debug logging for Z Exp internals (suppresses third-party noise)")
-    parser.add_argument("--ollama-model", type=str, default="gemma3:12b", help="Ollama model name")
-    parser.add_argument("--ollama-url", type=str, default="http://localhost:11434", help="Ollama server base URL")
+    parser.add_argument("--ollama-model", type=str, default=_DEFAULTS.ollama_model, help="Ollama model name")
+    parser.add_argument("--ollama-url", type=str, default=_DEFAULTS.ollama_base_url, help="Ollama server base URL")
     parser.add_argument("--include-ocr", action="store_true", help="Include OCR text in Gemma agent prompt")
-    parser.add_argument("--overlay-ws-url", type=str, default="ws://localhost:9321", help="Overlay WebSocket URL")
-    parser.add_argument("--llm-provider", type=str, default="gemini", help="LLM provider: openai or gemini")
-    parser.add_argument("--llm-model", type=str, default="gemini-3-flash-preview", help="LLM model name")
+    parser.add_argument("--max-image-width", type=int, default=_DEFAULTS.ollama_max_image_width, help="Max image width sent to Ollama vision model")
+    parser.add_argument("--overlay-ws-url", type=str, default=_DEFAULTS.overlay_ws_url, help="Overlay WebSocket URL")
+    parser.add_argument("--llm-provider", type=str, default=_DEFAULTS.llm_provider, help="LLM provider: openai or gemini")
+    parser.add_argument("--llm-model", type=str, default=_DEFAULTS.llm_model, help="LLM model name")
     return parser.parse_args()
 
 
@@ -79,6 +83,7 @@ async def run(settings: Settings) -> None:
             model=settings.ollama_model,
             include_ocr=settings.include_ocr,
             timeout_s=settings.ollama_timeout_s,
+            max_image_width=settings.ollama_max_image_width,
         ),
         BrowserContentAgent(),
         SocialContextAgent(
@@ -103,6 +108,7 @@ async def run(settings: Settings) -> None:
 
     reasoning_agents: list[ReasoningAgent] = [
         CritiqueReasoningAgent(llm=llm_client),
+        PresentationCritiqueAgent(model=settings.llm_model),
     ]
     general_agent = GeneralAgent(
         db=db,
@@ -234,6 +240,7 @@ def main() -> None:
         ollama_base_url=args.ollama_url,
         ollama_model=args.ollama_model,
         include_ocr=args.include_ocr,
+        ollama_max_image_width=args.max_image_width,
         overlay_ws_url=args.overlay_ws_url,
         llm_provider=args.llm_provider,
         llm_model=args.llm_model,
