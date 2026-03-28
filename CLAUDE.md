@@ -131,7 +131,7 @@ pytest tests/test_gemma_agent.py -v -s
 
 ## Running the app
 
-**Quick start (all services):**
+Always use `start.sh` to start and stop the app:
 
 ```bash
 ./start.sh          # starts Ollama, Python backend, Swift overlay
@@ -144,14 +144,6 @@ This launches three processes:
 3. **Swift overlay** — macOS floating panel (Cmd+Shift+O to toggle), WebSocket on port 9321
 
 Logs go to `/tmp/glimpse-backend.log` and `/tmp/glimpse-overlay.log`.
-
-**Backend only:**
-
-```bash
-python -m src.main --port 3030 --data-dir ~/.glimpse
-```
-
-Requires macOS with accessibility permissions (for CGEventTap) and optionally a local Ollama instance with `gemma3:12b` pulled.
 
 ## Conventions
 

@@ -17,6 +17,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from src.general_agent.tools import ToolRegistry
+from src.llm.client import LLMClient
+from src.llm.types import Message
 from src.storage.database import DatabaseManager
 
 logger = logging.getLogger(__name__)
@@ -27,6 +29,23 @@ MAX_CONVERSATION_TURNS = 30
 
 # Suppress duplicate notifications within this window (seconds)
 DEDUP_WINDOW_S = 30.0
+
+MAX_TOOL_ROUNDS = 10
+
+SYSTEM_PROMPT = """\
+You are Glimpse, a helpful assistant that watches the user's screen and \
+proactively surfaces useful information. You have access to the user's \
+screen capture history, OCR text, events, and actions stored in a local database.
+
+Use tools when you need to look up information. Prefer the database tools for \
+anything the user has seen on screen. Use web_search or price_lookup for \
+external information.
+
+Keep responses concise and helpful. If you have no relevant information, say so \
+briefly rather than making things up.
+
+{context}\
+"""
 
 
 @dataclass
@@ -51,10 +70,12 @@ class GeneralAgent:
         self,
         db: DatabaseManager,
         tools: ToolRegistry,
+        llm: LLMClient,
         overlay_ws_url: str = "ws://localhost:9321",
     ) -> None:
         self._db = db
         self._tools = tools
+        self._llm = llm
         self._overlay_ws_url = overlay_ws_url
 
         # Processing queue — events and actions arrive here via /push
@@ -264,67 +285,39 @@ class GeneralAgent:
         return "\n".join(parts)
 
     async def _generate_response(self, user_message: str, context: str) -> str:
-        """Generate a response to the user's message.
+        """Run an agentic loop: LLM may call tools, we execute them, repeat until text reply."""
+        system = SYSTEM_PROMPT.format(context=f"\n\nCurrent context:\n{context}" if context else "")
 
-        Currently uses a tool-augmented direct approach.
-        In production, wire this to an LLM (local or API) for natural conversation.
-        """
-        lower = user_message.lower()
+        messages: list[Message] = [Message(role="system", content=system)]
 
-        # Tool dispatch based on user intent
-        if any(kw in lower for kw in ["search", "look up", "find", "what is", "who is"]):
-            query = user_message
-            # Try DB first
-            db_result = await self._tools.call("db_query", table="ocr", query=query, limit="5")
-            parsed = json.loads(db_result)
-            if parsed:
-                return f"Here's what I found in your screen history:\n\n{self._format_search_results(parsed)}"
+        for turn in list(self._conversation)[-10:]:
+            messages.append(Message(role=turn.role, content=turn.text))
 
-            # Fall back to web search
-            web_result = await self._tools.call("web_search", query=query)
-            return f"Web search result:\n\n{web_result}"
+        messages.append(Message(role="user", content=user_message))
 
-        if any(kw in lower for kw in ["price", "cost", "how much", "cheaper"]):
-            product = user_message
-            result = await self._tools.call("price_lookup", product=product)
-            return f"Price lookup:\n\n{result}"
+        tool_specs = self._tools.list_specs()
 
-        if any(kw in lower for kw in ["recent", "what was i doing", "history", "activity"]):
-            result = await self._tools.call("db_query", table="events", query="", limit="10")
-            parsed = json.loads(result)
-            if parsed:
-                return f"Your recent activity:\n\n{self._format_search_results(parsed)}"
-            return "No recent activity found."
+        for _ in range(MAX_TOOL_ROUNDS):
+            try:
+                response = await self._llm.complete(messages, tools=tool_specs)
+            except Exception:
+                logger.error("LLM completion failed", exc_info=True)
+                return "Sorry, I couldn't generate a response right now."
 
-        # Default: provide context-aware response
-        if self._recent_items:
-            recent_summary = self._extract_summary(self._recent_items[-1])
-            return (
-                f"I'm watching your screen and here to help. "
-                f"Most recently I saw: {recent_summary[:200]}\n\n"
-                f"You can ask me to search your history, look things up, "
-                f"or I'll proactively suggest things when I notice something useful."
-            )
+            if not response.tool_calls:
+                return response.content or ""
 
-        return (
-            "I'm here and watching. Nothing notable yet. "
-            "Ask me anything or I'll chime in when I spot something useful."
-        )
+            messages.append(response)
 
-    def _format_search_results(self, results: list[dict]) -> str:
-        lines = []
-        for r in results[:5]:
-            # Adapt to whichever result shape we get
-            text = r.get("text") or r.get("summary") or r.get("action_description") or str(r)
-            app = r.get("app_name", "")
-            ts = r.get("timestamp", "")
-            line = f"• {text[:150]}"
-            if app:
-                line += f" ({app})"
-            if ts:
-                line += f" [{ts}]"
-            lines.append(line)
-        return "\n".join(lines)
+            for tc in response.tool_calls:
+                result = await self._tools.call(tc.name, **tc.arguments)
+                messages.append(Message(
+                    role="tool",
+                    content=result,
+                    tool_call_id=tc.id,
+                ))
+
+        return response.content or "I ran out of steps processing your request."
 
     # ── WebSocket to overlay ───────────────────────────────────
 

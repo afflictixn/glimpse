@@ -16,6 +16,7 @@ from src.capture.triggers import CaptureLoop
 from src.config import Settings, set_settings
 from src.general_agent.agent import GeneralAgent
 from src.general_agent.tools import ToolRegistry
+from src.llm import create_llm_client
 from src.intelligence.intelligence_layer import IntelligenceLayer
 from src.process.gemma_agent import GemmaAgent
 from src.process.process_agent import ProcessAgent
@@ -40,6 +41,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ollama-url", type=str, default="http://localhost:11434", help="Ollama server base URL")
     parser.add_argument("--include-ocr", action="store_true", help="Include OCR text in Gemma agent prompt")
     parser.add_argument("--overlay-ws-url", type=str, default="ws://localhost:9321", help="Overlay WebSocket URL")
+    parser.add_argument("--llm-provider", type=str, default="openai", help="LLM provider: openai or gemini")
+    parser.add_argument("--llm-model", type=str, default="gpt-4o-mini", help="LLM model name")
     return parser.parse_args()
 
 
@@ -76,10 +79,12 @@ async def run(settings: Settings) -> None:
     reasoning_agents: list[ReasoningAgent] = []
 
     # General agent
+    llm_client = create_llm_client(settings.llm_provider, settings.llm_model)
     tool_registry = ToolRegistry(db)
     general_agent = GeneralAgent(
         db=db,
         tools=tool_registry,
+        llm=llm_client,
         overlay_ws_url=settings.overlay_ws_url,
     )
 
@@ -199,6 +204,8 @@ def main() -> None:
         ollama_model=args.ollama_model,
         include_ocr=args.include_ocr,
         overlay_ws_url=args.overlay_ws_url,
+        llm_provider=args.llm_provider,
+        llm_model=args.llm_model,
         debug=args.debug,
     )
 
