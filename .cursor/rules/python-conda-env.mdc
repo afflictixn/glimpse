@@ -1,0 +1,15 @@
+---
+description: Use conda_ai alias to activate the AI conda environment before running Python code
+globs: **/*.py
+alwaysApply: false
+---
+
+# Python Environment
+
+Before running any Python code in the terminal, activate the conda environment using:
+
+```bash
+conda_ai
+```
+
+This alias sets up the correct `ai` conda environment with all required dependencies. Always run `conda_ai` before executing Python scripts, launching Jupyter, or running any Python-related commands.
