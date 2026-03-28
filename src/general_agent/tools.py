@@ -54,11 +54,19 @@ class ToolRegistry:
             spec=ToolSpec(
                 name="db_raw_sql",
                 description=(
-                    "Execute a raw SELECT query against the Glimpse SQLite database. "
-                    "Use for complex queries that the FTS search tools can't handle."
+                    "Execute a read-only SELECT query against the Glimpse SQLite database. "
+                    "Only SELECT statements are allowed. "
+                    "Schema: "
+                    "frames(id, timestamp, snapshot_path, app_name, window_name, focused, capture_trigger, content_hash) | "
+                    "ocr_text(id, frame_id, text, text_json, confidence) | "
+                    "events(id, frame_id, agent_name, app_type, summary, metadata, created_at) | "
+                    "context(id, frame_id, source, content_type, content, metadata, created_at) | "
+                    "actions(id, event_id, frame_id, agent_name, action_type, action_description, metadata, created_at) | "
+                    "memory(id, entity_type, entity_name, fact, source, confidence, created_at, last_seen). "
+                    "Note: only 'frames' has 'timestamp'; all other tables use 'created_at'."
                 ),
                 parameters={
-                    "sql": "SELECT query to execute",
+                    "sql": "SELECT query to execute (only SELECT allowed)",
                     "limit": "Max rows (default 20)",
                 },
             ),
