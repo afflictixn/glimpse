@@ -36,12 +36,14 @@ struct MessageBubble: View {
                     if !message.content.isEmpty {
                         Text(message.content)
                             .textSelection(.enabled)
-                            .foregroundColor(.white)
+                            .foregroundColor(.white.opacity(isUser ? 0.9 : 0.8))
                             .padding(.horizontal, 12)
                             .padding(.vertical, 8)
                             .background(
-                                RoundedRectangle(cornerRadius: 14)
-                                    .fill(isUser ? Color.blue.opacity(0.55) : Color.white.opacity(0.12))
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .fill(isUser
+                                        ? Color(hue: 0.6, saturation: 0.5, brightness: 0.9).opacity(0.2)
+                                        : Color.white.opacity(0.06))
                             )
                     }
                 }

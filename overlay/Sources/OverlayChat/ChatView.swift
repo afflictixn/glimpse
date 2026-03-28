@@ -24,7 +24,12 @@ struct ChatView: View {
                 inputBar
             }
         }
-        .background(VisualEffectBackground(material: .hudWindow))
+        .background(
+            ZStack {
+                Color.black.opacity(0.6)
+                Color(hue: 0.6, saturation: 0.5, brightness: 0.9).opacity(0.05)
+            }
+        )
     }
 
     // MARK: - Header

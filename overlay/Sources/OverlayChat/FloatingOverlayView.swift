@@ -14,9 +14,18 @@ struct FloatingOverlayView: View {
             compactInput
         }
         .frame(width: 300)
-        .background(VisualEffectBackground(material: .hudWindow))
-        .clipShape(RoundedRectangle(cornerRadius: 14))
-        .shadow(color: .black.opacity(0.4), radius: 20, y: 8)
+        .background(
+            ZStack {
+                Color.black.opacity(0.6)
+                Color(hue: 0.6, saturation: 0.5, brightness: 0.9).opacity(0.05)
+            }
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(Color(hue: 0.6, saturation: 0.5, brightness: 0.9).opacity(0.15), lineWidth: 0.5)
+        )
+        .shadow(color: .black.opacity(0.3), radius: 20, y: 8)
         .onAppear { resetInactivityTimer() }
         .onChange(of: viewModel.messages.count) { _ in resetInactivityTimer() }
         .onChange(of: viewModel.inputText) { _ in resetInactivityTimer() }
@@ -105,10 +114,10 @@ struct FloatingOverlayView: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
                 .background(
-                    RoundedRectangle(cornerRadius: 10)
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .fill(message.role == .user
-                            ? Color.blue.opacity(0.25)
-                            : Color.white.opacity(0.08))
+                            ? Color(hue: 0.6, saturation: 0.5, brightness: 0.9).opacity(0.15)
+                            : Color.white.opacity(0.05))
                 )
 
             if message.role != .user { Spacer(minLength: 40) }

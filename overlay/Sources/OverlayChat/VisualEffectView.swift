@@ -17,6 +17,7 @@ struct VisualEffectBackground: NSViewRepresentable {
         view.blendingMode = blendingMode
         view.state = .active
         view.isEmphasized = true
+        view.appearance = NSAppearance(named: .darkAqua)
         return view
     }
 

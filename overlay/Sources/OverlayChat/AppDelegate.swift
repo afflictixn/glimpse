@@ -93,12 +93,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let screen = NSScreen.main else { return }
         let visibleFrame = screen.visibleFrame
 
-        // Positioned center-right
-        let width: CGFloat = 320
-        let height: CGFloat = 80
+        // Top center — Dynamic Island style
+        let width: CGFloat = 500
+        let height: CGFloat = 70
         let origin = CGPoint(
-            x: visibleFrame.maxX - width - 60,
-            y: visibleFrame.midY - height / 2
+            x: visibleFrame.midX - width / 2,
+            y: visibleFrame.maxY - height
         )
 
         suggestionWindow = NSPanel(
