@@ -73,6 +73,7 @@ class GeneralAgent:
         llm: LLMClient,
         overlay_ws_url: str = "ws://localhost:9321",
         voice: VoiceClient | None = None,
+        importance_filter_enabled: bool = False,
     ) -> None:
         self._db = db
         self._tools = tools
@@ -90,7 +91,7 @@ class GeneralAgent:
         # Conversation history with the user
         self._conversation: deque[ConversationTurn] = deque(maxlen=MAX_CONVERSATION_TURNS)
 
-        self._filter = EventFilter()
+        self._filter = EventFilter(importance_filter_enabled=importance_filter_enabled)
 
         self._running = False
         self._ws_connection: Any | None = None
@@ -183,14 +184,10 @@ class GeneralAgent:
         if not should_process:
             return
 
-        agent_name = item.data.get("agent_name", "")
-        if agent_name == "social_context":
-            notification = await self._analyze_social_context(summary)
-        else:
-            notification = await self._analyze_screen_context(item, summary)
+        notification = await self._analyze_screen_context(item, summary)
 
         if not notification:
-            logger.debug("LLM found nothing noteworthy for %s event", agent_name or "unknown")
+            logger.debug("LLM found nothing noteworthy for %s event", item.data.get("agent_name", "unknown"))
             return
 
         if self._filter.is_duplicate_notification(notification):
@@ -267,37 +264,6 @@ class GeneralAgent:
             return result
         except Exception:
             logger.error("Screen context LLM analysis failed", exc_info=True)
-            return ""
-
-    async def _analyze_social_context(self, raw_context: str) -> str:
-        """Let the big LLM analyze social/chat context and produce a notification."""
-        from datetime import date
-        today = date.today().isoformat()
-
-        system = (
-            "You are Z, an ambient assistant. The user is chatting with someone. "
-            "You have been given their recent chat history and contact info.\n\n"
-            f"Today's date is {today}.\n\n"
-            "Your HIGHEST priority: if ANY birthday, anniversary, or important date is "
-            "mentioned in the conversation (even by the user themselves), calculate how "
-            "soon it is and remind the user. For example: 'Walter's birthday is April 2nd — "
-            "that's in 5 days! Consider getting a gift.'\n\n"
-            "Secondary: action items, unanswered questions, or promises made.\n\n"
-            "Write a SHORT (1-2 sentence) friendly notification. "
-            "If there is truly nothing worth notifying about, respond with exactly: NOTHING"
-        )
-        messages = [
-            Message(role="system", content=system),
-            Message(role="user", content=raw_context),
-        ]
-        try:
-            response = await self._llm.complete(messages)
-            result = response.content.strip()
-            if "NOTHING" in result.upper() or not result:
-                return ""
-            return result
-        except Exception:
-            logger.error("Social context LLM analysis failed", exc_info=True)
             return ""
 
     def _extract_summary(self, item: PushItem) -> str:

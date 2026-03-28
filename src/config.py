@@ -43,6 +43,7 @@ class Settings:
 
     # General agent
     overlay_ws_url: str = "ws://localhost:9321"
+    importance_filter_enabled: bool = False
 
     # ElevenLabs TTS
     elevenlabs_api_key: str = field(default_factory=lambda: os.getenv("ELEVENLABS_API_KEY", ""))

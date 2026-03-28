@@ -24,7 +24,6 @@ IMPORTANCE_THRESHOLD = 0.5
 _CONTEXT_COOLDOWNS: dict[str, float] = {
     "gemma3": 60.0,
     "gemini_vision": 60.0,
-    "social_context": 20.0,
 }
 _DEFAULT_CONTEXT_COOLDOWN = 30.0
 
@@ -37,7 +36,8 @@ _HIGH_SIGNAL_ACTION_TYPES = frozenset({
 class EventFilter:
     """Stateful filter that decides which pushed items warrant an LLM call."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, importance_filter_enabled: bool = False) -> None:
+        self._importance_filter_enabled = importance_filter_enabled
         self._recent_summaries: deque[tuple[str, float]] = deque(maxlen=200)
         self._recent_notifications: deque[tuple[str, float]] = deque(maxlen=100)
         self._last_context: dict[str, tuple[str, str, float]] = {}
@@ -59,7 +59,7 @@ class EventFilter:
             return False, 0.0
 
         importance = self._assess_importance(item)
-        if importance < IMPORTANCE_THRESHOLD:
+        if self._importance_filter_enabled and importance < IMPORTANCE_THRESHOLD:
             logger.debug("Filter: low importance (%.2f) — %s", importance, summary[:80])
             return False, importance
 
@@ -146,10 +146,6 @@ class EventFilter:
 
         if agent == "browser_content":
             score += 0.3
-
-        if agent == "social_context":
-            contacts = data.get("metadata", {}).get("contacts", [])
-            score += 0.4 if contacts else 0.0
 
         if agent.startswith("gemma") or agent == "gemini_vision":
             score += 0.1

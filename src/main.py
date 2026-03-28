@@ -24,7 +24,6 @@ from src.process.browser_content_agent import BrowserContentAgent
 from src.process.gemini_vision_agent import GeminiVisionAgent
 from src.process.gemma_agent import GemmaAgent
 from src.process.process_agent import ProcessAgent
-from src.process.social_context_agent import SocialContextAgent
 from src.context.context_provider import ContextProvider
 from src.intelligence.reasoning_agent import ReasoningAgent
 from src.storage.database import DatabaseManager
@@ -98,11 +97,6 @@ async def run(settings: Settings) -> None:
     process_agents: list[ProcessAgent] = [
         vision_agent,
         BrowserContentAgent(),
-        SocialContextAgent(
-            tools=tool_registry,
-            ollama_base_url=settings.ollama_base_url,
-            model="gemma3:1b",
-        ),
     ]
     context_providers: list[ContextProvider] = []
 
@@ -128,6 +122,7 @@ async def run(settings: Settings) -> None:
         llm=llm_client,
         overlay_ws_url=settings.overlay_ws_url,
         voice=voice,
+        importance_filter_enabled=settings.importance_filter_enabled,
     )
 
     intelligence = IntelligenceLayer(agents=reasoning_agents, db=db, general_agent=general_agent)
