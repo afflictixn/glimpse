@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Z Experience — Pitch</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/theme/black.css">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;900&display=swap');
+
+  :root {
+    --r-background-color: #0a0a0a;
+    --r-main-font: 'Inter', sans-serif;
+    --r-heading-font: 'Inter', sans-serif;
+    --r-main-color: #e0e0e0;
+    --r-heading-color: #ffffff;
+    --accent: #6C63FF;
+    --accent2: #00D4AA;
+    --accent3: #FF6B6B;
+  }
+
+  .reveal { font-family: var(--r-main-font); }
+  .reveal h1, .reveal h2, .reveal h3 { font-family: var(--r-heading-font); font-weight: 900; letter-spacing: -0.03em; }
+
+  /* --- SLIDE STYLES --- */
+
+  .slide-ai-word h1 {
+    font-size: 8em;
+    background: linear-gradient(135deg, #6C63FF, #00D4AA);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .slide-question h2 {
+    font-size: 2.4em;
+    font-weight: 300;
+    line-height: 1.4;
+    color: #999;
+  }
+  .slide-question h2 em {
+    color: #fff;
+    font-style: normal;
+    font-weight: 700;
+  }
+
+  /* Chat mockups */
+  .chat-grid {
+    display: flex;
+    gap: 24px;
+    justify-content: center;
+    flex-wrap: wrap;
+    margin-top: 40px;
+  }
+  .chat-window {
+    background: #1a1a1a;
+    border: 1px solid #333;
+    border-radius: 16px;
+    width: 260px;
+    padding: 20px;
+    text-align: left;
+    transition: transform 0.3s;
+  }
+  .chat-window:hover { transform: translateY(-4px); }
+  .chat-window .chat-title {
+    font-size: 0.65em;
+    color: #666;
+    margin-bottom: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+  }
+  .chat-window .chat-msg {
+    background: #252525;
+    border-radius: 10px;
+    padding: 10px 14px;
+    margin-bottom: 8px;
+    font-size: 0.55em;
+    color: #aaa;
+    line-height: 1.4;
+  }
+  .chat-window .chat-msg.user {
+    background: var(--accent);
+    color: #fff;
+    margin-left: 30px;
+  }
+  .chat-window .chat-msg.ai {
+    margin-right: 30px;
+  }
+
+  /* Problem slide */
+  .problem-list {
+    text-align: left;
+    max-width: 700px;
+    margin: 40px auto 0;
+  }
+  .problem-list .problem-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 16px;
+    margin-bottom: 28px;
+    opacity: 0.85;
+  }
+  .problem-item .icon {
+    font-size: 1.4em;
+    flex-shrink: 0;
+    width: 40px;
+    text-align: center;
+  }
+  .problem-item .text {
+    font-size: 0.85em;
+    line-height: 1.5;
+    color: #bbb;
+  }
+  .problem-item .text strong {
+    color: #fff;
+    display: block;
+    margin-bottom: 2px;
+  }
+
+  /* Revolution */
+  .slide-revolution h2 {
+    font-size: 2.2em;
+    font-weight: 300;
+    color: #555;
+  }
+  .slide-revolution h2 span {
+    color: var(--accent3);
+    font-weight: 700;
+    text-decoration: line-through;
+    text-decoration-color: var(--accent3);
+  }
+
+  /* Transition */
+  .slide-transition h2 {
+    font-size: 2.6em;
+    font-weight: 300;
+    color: #888;
+    line-height: 1.5;
+  }
+
+  /* Intro Z */
+  .slide-intro-z h1 {
+    font-size: 5em;
+    letter-spacing: 0.05em;
+    margin-bottom: 0;
+  }
+  .slide-intro-z .z-letter {
+    display: inline-block;
+    background: linear-gradient(135deg, #6C63FF 0%, #00D4AA 50%, #6C63FF 100%);
+    background-size: 200% 200%;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    animation: shimmer 3s ease-in-out infinite;
+  }
+  @keyframes shimmer {
+    0%, 100% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+  }
+  .slide-intro-z .subtitle {
+    font-size: 1.1em;
+    font-weight: 300;
+    color: #666;
+    margin-top: 8px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+  }
+
+  /* New experience */
+  .slide-new-exp h2 {
+    font-size: 2.2em;
+    font-weight: 300;
+    color: #999;
+    line-height: 1.5;
+  }
+  .slide-new-exp h2 em {
+    font-style: normal;
+    font-weight: 700;
+    color: #fff;
+  }
+
+  /* Pillars */
+  .pillars {
+    display: flex;
+    gap: 40px;
+    justify-content: center;
+    margin-top: 50px;
+  }
+  .pillar {
+    text-align: center;
+    width: 240px;
+  }
+  .pillar .pillar-icon {
+    font-size: 2.5em;
+    margin-bottom: 16px;
+  }
+  .pillar .pillar-title {
+    font-size: 1.1em;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+  .pillar .pillar-desc {
+    font-size: 0.65em;
+    color: #888;
+    line-height: 1.5;
+  }
+  .pillar:nth-child(1) .pillar-title { color: var(--accent); }
+  .pillar:nth-child(2) .pillar-title { color: var(--accent2); }
+  .pillar:nth-child(3) .pillar-title { color: var(--accent3); }
+  .pillar:nth-child(1) .pillar-icon { color: var(--accent); }
+  .pillar:nth-child(2) .pillar-icon { color: var(--accent2); }
+  .pillar:nth-child(3) .pillar-icon { color: var(--accent3); }
+
+  /* Demo slide */
+  .slide-demo h2 {
+    font-size: 2em;
+    font-weight: 300;
+    color: #888;
+  }
+  .slide-demo h2 em {
+    font-style: normal;
+    font-weight: 700;
+    background: linear-gradient(135deg, #6C63FF, #00D4AA);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .slide-demo .demo-badge {
+    display: inline-block;
+    margin-top: 40px;
+    padding: 12px 36px;
+    border: 2px solid var(--accent);
+    border-radius: 999px;
+    color: var(--accent);
+    font-size: 0.8em;
+    font-weight: 600;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    animation: pulse 2s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(108, 99, 255, 0.4); }
+    50% { box-shadow: 0 0 20px 8px rgba(108, 99, 255, 0.15); }
+  }
+
+  /* Raise hand */
+  .raise-hand {
+    margin-top: 30px;
+    font-size: 0.7em;
+    color: #555;
+    font-style: italic;
+  }
+
+  /* Global fragment transition */
+  .reveal .slides section .fragment {
+    transition: all 0.4s ease;
+  }
+
+  /* Subtle vignette */
+  .reveal::after {
+    content: '';
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    pointer-events: none;
+    background: radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,0.4) 100%);
+    z-index: 999;
+  }
+
+  /* Hands emoji */
+  .hands-row {
+    font-size: 2em;
+    margin-top: 30px;
+    opacity: 0.6;
+  }
+</style>
+</head>
+<body>
+
+<div class="reveal">
+<div class="slides">
+
+  <!-- 1. AI -->
+  <section class="slide-ai-word" data-transition="fade">
+    <h1>AI.</h1>
+  </section>
+
+  <!-- 2. What comes to mind? -->
+  <section class="slide-question" data-transition="fade">
+    <h2>What comes to mind<br>when you see <em>this word</em>?</h2>
+  </section>
+
+  <!-- 3. Probably this -->
+  <section data-transition="fade">
+    <h3 style="font-weight:300; color:#666; margin-bottom:10px;">Probably this.</h3>
+    <div class="chat-grid">
+      <div class="chat-window">
+        <div class="chat-title">ChatGPT</div>
+        <div class="chat-msg user">Write me an essay about climate change</div>
+        <div class="chat-msg ai">Climate change is one of the most pressing issues...</div>
+      </div>
+      <div class="chat-window">
+        <div class="chat-title">Claude</div>
+        <div class="chat-msg user">Help me debug this Python error</div>
+        <div class="chat-msg ai">I'd be happy to help. Could you share the traceback...</div>
+      </div>
+      <div class="chat-window">
+        <div class="chat-title">Gemini</div>
+        <div class="chat-msg user">Summarize this article for me</div>
+        <div class="chat-msg ai">Here are the key takeaways from the article...</div>
+      </div>
+    </div>
+    <div class="raise-hand fragment">Who here imagines AI like this?</div>
+    <div class="hands-row fragment">&#x1F64B; &#x1F64B;&#x200D;&#x2642;&#xFE0F; &#x1F64B;&#x200D;&#x2640;&#xFE0F;</div>
+  </section>
+
+  <!-- 4. The problem -->
+  <section data-transition="fade">
+    <h3 style="font-weight:700; color:#fff; font-size:1.6em; margin-bottom:0;">The problem with chat</h3>
+    <div class="problem-list">
+      <div class="problem-item fragment">
+        <div class="icon">&#x1F4DD;</div>
+        <div class="text">
+          <strong>You type the entire context. Every. Single. Time.</strong>
+          Copy-paste your code, explain the situation, set the scene...
+        </div>
+      </div>
+      <div class="problem-item fragment">
+        <div class="icon">&#x1F9E0;</div>
+        <div class="text">
+          <strong>"When did we talk about that?"</strong>
+          Context is lost between sessions. You start from scratch.
+        </div>
+      </div>
+      <div class="problem-item fragment">
+        <div class="icon">&#x23F3;</div>
+        <div class="text">
+          <strong>You have to ask first.</strong>
+          AI just sits there. Waiting. It never comes to you.
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 5. Not revolutionary -->
+  <section class="slide-revolution" data-transition="fade">
+    <h2>Doesn't feel quite<br><span>revolutionary</span><br>right?</h2>
+  </section>
+
+  <!-- 6. Transition -->
+  <section class="slide-transition" data-transition="fade">
+    <h2>It doesn't have<br>to be like this.</h2>
+  </section>
+
+  <!-- 7. Introducing -->
+  <section data-transition="zoom" data-background-transition="zoom">
+    <p style="font-size:1.2em; font-weight:300; color:#555; letter-spacing:0.2em; text-transform:uppercase; margin-bottom:20px;">Introducing</p>
+  </section>
+
+  <!-- 8. Z Experience -->
+  <section class="slide-intro-z" data-transition="zoom" data-background-color="#050505">
+    <h1><span class="z-letter">Z</span></h1>
+    <div class="subtitle">Experience</div>
+  </section>
+
+  <!-- 9. New experience -->
+  <section class="slide-new-exp" data-transition="fade">
+    <h2>A <em>new experience</em><br>of using your computer.</h2>
+  </section>
+
+  <!-- 10. Three pillars -->
+  <section data-transition="fade">
+    <div class="pillars">
+      <div class="pillar fragment" data-fragment-index="1">
+        <div class="pillar-icon">&#x26A1;</div>
+        <div class="pillar-title">Proactive</div>
+        <div class="pillar-desc">Z doesn't wait for you to ask.<br>It sees what you're doing and<br>offers help before you need it.</div>
+      </div>
+      <div class="pillar fragment" data-fragment-index="2">
+        <div class="pillar-icon">&#x1F49C;</div>
+        <div class="pillar-title">Caring</div>
+        <div class="pillar-desc">Z remembers your context,<br>your conversations, your habits.<br>It genuinely looks out for you.</div>
+      </div>
+      <div class="pillar fragment" data-fragment-index="3">
+        <div class="pillar-icon">&#x1F512;</div>
+        <div class="pillar-title">Private</div>
+        <div class="pillar-desc">Everything runs locally on<br>your machine. Your data never<br>leaves your computer.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 11. Demo -->
+  <section class="slide-demo" data-transition="fade" data-background-color="#050505">
+    <h2><em>Z</em>, how about you<br>just introduce yourself?</h2>
+    <div class="demo-badge">Live Demo</div>
+  </section>
+
+</div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.js"></script>
+<script>
+  Reveal.initialize({
+    hash: true,
+    controls: false,
+    progress: true,
+    center: true,
+    transition: 'fade',
+    transitionSpeed: 'slow',
+    backgroundTransition: 'fade',
+  });
+</script>
+</body>
+</html>

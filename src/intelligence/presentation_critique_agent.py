@@ -138,10 +138,13 @@ class PresentationCritiqueAgent(ReasoningAgent):
             response_mime_type="application/json",
         )
 
-        response = await self._client.aio.models.generate_content(
-            model=self._model,
-            contents=[gtypes.Content(role="user", parts=[image_part, text_part])],
-            config=config,
+        response = await asyncio.wait_for(
+            self._client.aio.models.generate_content(
+                model=self._model,
+                contents=[gtypes.Content(role="user", parts=[image_part, text_part])],
+                config=config,
+            ),
+            timeout=10,
         )
 
         return response.text or ""

@@ -16,6 +16,8 @@ logger = logging.getLogger(__name__)
 
 
 class IntelligenceLayer:
+    _REASON_TIMEOUT = 30  # max seconds for a single reasoning agent call
+
     def __init__(
         self,
         agents: list[ReasoningAgent],
@@ -41,12 +43,20 @@ class IntelligenceLayer:
                 event = await asyncio.wait_for(self._event_queue.get(), timeout=1.0)
             except asyncio.TimeoutError:
                 continue
+            except asyncio.CancelledError:
+                break
 
             if not self._agents:
                 continue
 
             results = await asyncio.gather(
-                *(agent.reason(event, self._db) for agent in self._agents),
+                *(
+                    asyncio.wait_for(
+                        agent.reason(event, self._db),
+                        timeout=self._REASON_TIMEOUT,
+                    )
+                    for agent in self._agents
+                ),
                 return_exceptions=True,
             )
             for i, result in enumerate(results):

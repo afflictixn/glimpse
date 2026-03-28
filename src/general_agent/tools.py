@@ -364,12 +364,17 @@ class ToolRegistry:
         return json.dumps(rows, default=str)
 
     async def _web_search(self, query: str = "") -> str:
+        import asyncio as _asyncio
         from duckduckgo_search import DDGS
 
         logger.info("web_search called: %s", query)
-        try:
+
+        def _sync_search() -> list:
             with DDGS() as ddgs:
-                results = list(ddgs.text(query, max_results=5))
+                return list(ddgs.text(query, max_results=5))
+
+        try:
+            results = await _asyncio.to_thread(_sync_search)
             return json.dumps(results, default=str)
         except Exception as e:
             logger.error("Web search failed: %s", e)
@@ -772,7 +777,7 @@ class ToolRegistry:
             return json.dumps({"error": f"iMessage conversation unavailable. ({e})"})
 
     async def _imessage_send(self, to: str = "", message: str = "") -> str:
-        import subprocess
+        import asyncio as _asyncio
 
         logger.info("imessage_send called: to=%s", to)
         if not to or not message:
@@ -789,14 +794,20 @@ class ToolRegistry:
         end tell
         '''
         try:
-            result = subprocess.run(
-                ["osascript", "-e", script],
-                capture_output=True, text=True, timeout=10,
+            proc = await _asyncio.create_subprocess_exec(
+                "osascript", "-e", script,
+                stdout=_asyncio.subprocess.PIPE,
+                stderr=_asyncio.subprocess.PIPE,
             )
-            if result.returncode == 0:
+            stdout, stderr = await _asyncio.wait_for(proc.communicate(), timeout=10)
+            if proc.returncode == 0:
                 return json.dumps({"sent": True, "to": to, "message": message})
             else:
-                return json.dumps({"error": f"AppleScript failed: {result.stderr.strip()}"})
+                return json.dumps({"error": f"AppleScript failed: {stderr.decode().strip()}"})
+        except _asyncio.TimeoutError:
+            proc.kill()
+            logger.error("imessage_send timed out")
+            return json.dumps({"error": "iMessage send timed out"})
         except Exception as e:
             logger.error("imessage_send failed: %s", e)
             return json.dumps({"error": f"iMessage send failed: {e}"})

@@ -19,6 +19,7 @@ from typing import Any
 from src.general_agent.event_filter import EventFilter
 from src.general_agent.ollama_client import sanitize_response
 from src.general_agent.tools import ToolRegistry
+from src.general_agent.ws_manager import ConnectionManager
 from src.llm.client import LLMClient
 from src.llm.types import Message
 from src.storage.database import DatabaseManager
@@ -69,14 +70,14 @@ class GeneralAgent:
         db: DatabaseManager,
         tools: ToolRegistry,
         llm: LLMClient,
-        overlay_ws_url: str = "ws://localhost:9321",
+        ws_manager: ConnectionManager | None = None,
         voice: VoiceClient | None = None,
         importance_filter_enabled: bool = False,
     ) -> None:
         self._db = db
         self._tools = tools
         self._llm = llm
-        self._overlay_ws_url = overlay_ws_url
+        self._ws_manager = ws_manager
         self._voice = voice
         self._voice_enabled = voice is not None  # mirrors overlay setting
 
@@ -92,8 +93,7 @@ class GeneralAgent:
         self._filter = EventFilter(importance_filter_enabled=importance_filter_enabled)
 
         self._running = False
-        self._ws_connection: Any | None = None
-        self._ws_lock = asyncio.Lock()
+        self._chat_lock = asyncio.Lock()
 
     # ── Public interface ───────────────────────────────────────
 
@@ -102,29 +102,40 @@ class GeneralAgent:
         item = PushItem(kind=kind, data=data)
         await self._queue.put(item)
 
+    _CHAT_TIMEOUT = 60  # max seconds for entire chat round-trip
+
     async def chat(self, user_message: str) -> str:
-        """Called by /chat endpoint — user sends a message, get a response."""
-        self._conversation.append(ConversationTurn(role="user", text=user_message))
+        """Called by /chat endpoint — user sends a message, get a response.
 
-        # Build context for the response
+        Serialized via _chat_lock so concurrent calls (e.g. rapid "more"
+        actions from the overlay) don't race on _conversation.
+        """
+        async with self._chat_lock:
+            try:
+                return await asyncio.wait_for(
+                    self._chat_inner(user_message),
+                    timeout=self._CHAT_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                logger.warning("Chat timed out after %ds", self._CHAT_TIMEOUT)
+                return "Sorry, that took too long — try again?"
+
+    async def _chat_inner(self, user_message: str) -> str:
         context = self._build_context()
-
-        # LLM-driven tool-augmented response
         response = sanitize_response(await self._generate_response(user_message, context))
 
+        # Only append to conversation after we have a complete pair
+        self._conversation.append(ConversationTurn(role="user", text=user_message))
         self._conversation.append(ConversationTurn(role="assistant", text=response))
 
-        # Push the conversation to the overlay
         await self._ws_send({
             "type": "append_conversation",
             "role": "assistant",
             "text": response,
         })
 
-        # Speak the response aloud
         if self._voice and self._voice_enabled:
             asyncio.create_task(self._voice.speak(response))
-
 
         return response
 
@@ -135,7 +146,7 @@ class GeneralAgent:
             "queue_depth": self._queue.qsize(),
             "recent_items": len(self._recent_items),
             "conversation_turns": len(self._conversation),
-            "ws_connected": self._ws_connection is not None,
+            "ws_clients": self._ws_manager.client_count if self._ws_manager else 0,
             "tts_enabled": self._voice is not None,
             "voice_enabled": self._voice_enabled,
         }
@@ -145,7 +156,8 @@ class GeneralAgent:
     async def run(self) -> None:
         """Background loop: consume queue items, evaluate, act."""
         self._running = True
-        logger.info("General agent started (overlay WS: %s)", self._overlay_ws_url)
+        logger.info("General agent started (WS broadcast to %d clients)",
+                     self._ws_manager.client_count if self._ws_manager else 0)
 
         while self._running:
             try:
@@ -155,10 +167,43 @@ class GeneralAgent:
             except asyncio.CancelledError:
                 break
 
+            # Drain excess queue items, keeping only the newest ones
+            if self._queue.qsize() >= self._MAX_QUEUE_DEPTH:
+                kept: list[PushItem] = [item]
+                while not self._queue.empty():
+                    try:
+                        kept.append(self._queue.get_nowait())
+                    except asyncio.QueueEmpty:
+                        break
+                dropped = len(kept) - self._MAX_QUEUE_DEPTH
+                if dropped > 0:
+                    logger.info("Queue overflow: dropped %d stale items, keeping %d",
+                                dropped, self._MAX_QUEUE_DEPTH)
+                    kept = kept[-self._MAX_QUEUE_DEPTH:]
+                for k in kept:
+                    await self._queue.put(k)
+                item = await self._queue.get()
+
+            # Drop items that sat in the queue too long
+            age = time.time() - item.received_at
+            if age > self._STALE_ITEM_S:
+                logger.debug("Dropping stale item (%.1fs old): %s",
+                             age, self._extract_summary(item)[:80])
+                continue
+
             self._recent_items.append(item)
 
             try:
-                await self._process_item(item)
+                await asyncio.wait_for(
+                    self._process_item(item),
+                    timeout=self._PROCESS_ITEM_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "Processing item timed out after %ds, skipping: %s",
+                    self._PROCESS_ITEM_TIMEOUT,
+                    self._extract_summary(item)[:100],
+                )
             except Exception:
                 logger.error("General agent failed processing item", exc_info=True)
 
@@ -166,7 +211,6 @@ class GeneralAgent:
 
     async def stop(self) -> None:
         self._running = False
-        await self._ws_disconnect()
         if self._voice:
             await self._voice.close()
 
@@ -247,11 +291,17 @@ class GeneralAgent:
             Message(role="user", content=context_block),
         ]
         try:
-            response = await self._llm.complete(messages)
+            response = await asyncio.wait_for(
+                self._llm.complete(messages),
+                timeout=self._LLM_CALL_TIMEOUT,
+            )
             result = response.content.strip()
             if "NOTHING" in result.upper() or not result:
                 return ""
             return result
+        except asyncio.TimeoutError:
+            logger.warning("Screen context LLM call timed out after %ds", self._LLM_CALL_TIMEOUT)
+            return ""
         except Exception:
             logger.error("Screen context LLM analysis failed", exc_info=True)
             return ""
@@ -317,7 +367,14 @@ class GeneralAgent:
         last_text = ""
         for round_num in range(MAX_TOOL_ROUNDS):
             try:
-                response = await self._llm.complete(messages, tools=tool_specs)
+                response = await asyncio.wait_for(
+                    self._llm.complete(messages, tools=tool_specs),
+                    timeout=self._LLM_CALL_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                logger.warning("LLM call timed out after %ds (round %d)",
+                               self._LLM_CALL_TIMEOUT, round_num + 1)
+                return last_text or "Sorry, I couldn't generate a response right now."
             except Exception:
                 logger.error("LLM completion failed", exc_info=True)
                 return last_text or "Sorry, I couldn't generate a response right now."
@@ -334,7 +391,14 @@ class GeneralAgent:
             messages.append(response)
 
             for tc in response.tool_calls:
-                result = await self._tools.call(tc.name, **tc.arguments)
+                try:
+                    result = await asyncio.wait_for(
+                        self._tools.call(tc.name, **tc.arguments),
+                        timeout=self._TOOL_CALL_TIMEOUT,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning("Tool %s timed out after %ds", tc.name, self._TOOL_CALL_TIMEOUT)
+                    result = json.dumps({"error": f"Tool {tc.name} timed out"})
                 messages.append(Message(
                     role="tool",
                     content=result,
@@ -344,89 +408,22 @@ class GeneralAgent:
 
         return last_text or "I ran out of steps processing your request."
 
-    # ── WebSocket to overlay ───────────────────────────────────
+    # ── Timeouts ──────────────────────────────────────────────
 
-    _WS_SEND_RETRIES = 2
-    _WS_CONNECT_TIMEOUT = 5
+    _PROCESS_ITEM_TIMEOUT = 30  # max seconds for filter + LLM + ws_send per item
+    _LLM_CALL_TIMEOUT = 20     # max seconds for a single LLM completion
+    _TOOL_CALL_TIMEOUT = 15    # max seconds for a single tool execution
+    _STALE_ITEM_S = 10         # drop queued items older than this many seconds
+    _MAX_QUEUE_DEPTH = 3       # when queue exceeds this, drain to only the newest items
 
-    async def _ws_ensure_connected(self) -> None:
-        """Establish (or re-establish) the overlay WebSocket connection.
-
-        Must be called while holding ``_ws_lock``.
-        """
-        import websockets
-
-        if self._ws_connection is not None:
-            return
-
-        self._ws_connection = await asyncio.wait_for(
-            websockets.connect(
-                self._overlay_ws_url,
-                ping_interval=20,
-                ping_timeout=10,
-                close_timeout=5,
-            ),
-            timeout=self._WS_CONNECT_TIMEOUT,
-        )
-        logger.info("Connected to overlay WebSocket at %s", self._overlay_ws_url)
-
-    async def _ws_close_connection(self) -> None:
-        """Close the current connection (if any) without acquiring the lock."""
-        if self._ws_connection is not None:
-            try:
-                await self._ws_connection.close()
-            except Exception:
-                pass
-            self._ws_connection = None
+    # ── WebSocket broadcast to overlay / browser clients ────────
 
     async def _ws_send(self, message: dict[str, Any]) -> None:
-        """Send a JSON message to the overlay via WebSocket.
+        """Broadcast a JSON message to all connected WS clients."""
+        if self._ws_manager is not None:
+            await self._ws_manager.broadcast(message)
 
-        Retries once with a fresh connection on failure so that transient
-        disconnects (overlay restart, stale socket) don't silently drop
-        messages.
-        """
-        payload = json.dumps(message)
-
-        async with self._ws_lock:
-            for attempt in range(1, self._WS_SEND_RETRIES + 1):
-                try:
-                    await self._ws_ensure_connected()
-                    await self._ws_connection.send(payload)
-                    return
-                except Exception:
-                    await self._ws_close_connection()
-                    if attempt < self._WS_SEND_RETRIES:
-                        logger.debug("WebSocket send failed (attempt %d), reconnecting", attempt)
-                    else:
-                        logger.warning(
-                            "WebSocket send failed after %d attempts, message dropped: %s",
-                            self._WS_SEND_RETRIES,
-                            message.get("type", "?"),
-                        )
-
-    async def _ws_disconnect(self) -> None:
-        async with self._ws_lock:
-            await self._ws_close_connection()
-
-    # ── WebSocket listener (overlay → agent) ───────────────────
-
-    async def _ws_listen(self) -> None:
-        """Listen for messages from the overlay (user actions like 'yes do it', 'tell me more')."""
-        import websockets
-
-        while self._running:
-            try:
-                async with websockets.connect(self._overlay_ws_url) as ws:
-                    async for raw in ws:
-                        try:
-                            msg = json.loads(raw)
-                            await self._handle_overlay_message(msg)
-                        except json.JSONDecodeError:
-                            logger.debug("Invalid JSON from overlay: %s", raw[:100])
-            except Exception:
-                logger.debug("Overlay WS listener disconnected, retrying in 5s")
-                await asyncio.sleep(5.0)
+    # ── Inbound messages from overlay (routed by FastAPI /ws) ──
 
     async def _handle_overlay_message(self, msg: dict[str, Any]) -> None:
         """Handle a message from the overlay UI."""
@@ -439,7 +436,7 @@ class GeneralAgent:
             elif action == "more":
                 logger.info("User wants more details")
                 if text:
-                    response = await self.chat(f"Tell me more about: {text}")
+                    asyncio.create_task(self.chat(f"Tell me more about: {text}"))
             elif action == "dismiss":
                 logger.info("User dismissed proposal")
         elif msg_type == "pause_toggle":

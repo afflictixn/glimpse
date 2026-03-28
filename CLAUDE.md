@@ -12,7 +12,7 @@ Always use `start.sh` to start and stop the app:
 This launches three processes:
 1. **Ollama** (port 11434) — local LLM server for Gemma 3 12B
 2. **Python backend** (port 3030) — capture loop, OCR, agents, API, general agent
-3. **Swift overlay** — macOS floating panel (Cmd+Shift+O to toggle), WebSocket on port 9321
+3. **Swift overlay** — macOS floating panel (Cmd+Shift+O to toggle), connects to backend WS at ws://localhost:3030/ws
 
 Logs go to `/tmp/zexp-backend.log` and `/tmp/zexp-overlay.log`.
 
@@ -74,7 +74,7 @@ Z Exp is a macOS-native screen activity capture and intelligence service. The as
 │  context, actions + FTS indexes  │ │  direct method calls from capture  │
 │  JPEG files ~/.zexp/data/        │ │  loop and intelligence layer       │
 │  Periodic retention cleanup      │ │  Uses tools (DB, web search stubs) │
-│                                  │ │  Pushes proposals → overlay via WS │
+│                                  │ │  Broadcasts proposals via /ws      │
 │                                  │ │  Maintains conversation context    │
 └──────────────────────────────────┘ └──────────────────────────────────┘
                     │
@@ -90,6 +90,7 @@ Z Exp is a macOS-native screen activity capture and intelligence service. The as
 │  /agent/push    — push events/actions to general agent      │
 │  /agent/chat    — user conversation with general agent      │
 │  /agent/status  — agent health, queue depth, session state  │
+│  /ws            — WebSocket: broadcasts to overlay/browsers  │
 └─────────────────────────────────────────────────────────────┘
 ```
 

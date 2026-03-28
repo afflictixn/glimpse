@@ -16,6 +16,7 @@ from src.capture.triggers import CaptureLoop
 from src.config import Settings, set_settings
 from src.general_agent.agent import GeneralAgent
 from src.general_agent.tools import ToolRegistry
+from src.general_agent.ws_manager import ConnectionManager
 from src.llm import create_llm_client
 from src.intelligence.intelligence_layer import IntelligenceLayer
 from src.intelligence.critique_agent import CritiqueReasoningAgent
@@ -50,7 +51,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ollama-url", type=str, default=_DEFAULTS.ollama_base_url, help="Ollama server base URL")
     parser.add_argument("--include-ocr", action="store_true", help="Include OCR text in Gemma agent prompt")
     parser.add_argument("--max-image-width", type=int, default=_DEFAULTS.ollama_max_image_width, help="Max image width sent to Ollama vision model")
-    parser.add_argument("--overlay-ws-url", type=str, default=_DEFAULTS.overlay_ws_url, help="Overlay WebSocket URL")
     parser.add_argument("--llm-provider", type=str, default=_DEFAULTS.llm_provider, help="LLM provider: openai or gemini")
     parser.add_argument("--llm-model", type=str, default=_DEFAULTS.llm_model, help="LLM model name")
     return parser.parse_args()
@@ -112,6 +112,8 @@ async def run(settings: Settings) -> None:
 
     llm_client = create_llm_client(settings.llm_provider, settings.llm_model)
 
+    ws_manager = ConnectionManager()
+
     reasoning_agents: list[ReasoningAgent] = [
         CritiqueReasoningAgent(llm=llm_client),
         PresentationCritiqueAgent(model=settings.llm_model),
@@ -120,7 +122,7 @@ async def run(settings: Settings) -> None:
         db=db,
         tools=tool_registry,
         llm=llm_client,
-        overlay_ws_url=settings.overlay_ws_url,
+        ws_manager=ws_manager,
         voice=voice,
         importance_filter_enabled=settings.importance_filter_enabled,
     )
@@ -162,6 +164,7 @@ async def run(settings: Settings) -> None:
         process_agents=process_agents,
         context_providers=context_providers,
         intelligence_layer=intelligence,
+        ws_manager=ws_manager,
     )
 
     config = uvicorn.Config(
@@ -250,7 +253,6 @@ def main() -> None:
         ollama_model=args.ollama_model,
         include_ocr=args.include_ocr,
         ollama_max_image_width=args.max_image_width,
-        overlay_ws_url=args.overlay_ws_url,
         llm_provider=args.llm_provider,
         llm_model=args.llm_model,
         debug=args.debug,

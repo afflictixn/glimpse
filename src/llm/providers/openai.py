@@ -1,6 +1,7 @@
 """OpenAI provider — translates between internal types and the OpenAI chat completions API."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any
@@ -12,12 +13,16 @@ from src.llm.types import Message, ToolCall, ToolSpec
 logger = logging.getLogger(__name__)
 
 
+_DEFAULT_TIMEOUT = 30
+
+
 class OpenAIClient:
     """LLMClient implementation backed by the OpenAI SDK."""
 
     def __init__(self, model: str = "gpt-4o-mini", **kwargs: Any) -> None:
         self._model = model
         self._api_key: str | None = kwargs.pop("api_key", None)
+        self._timeout: float = kwargs.pop("timeout", _DEFAULT_TIMEOUT)
         self._client = AsyncOpenAI(api_key=self._api_key)
         self._extra_kwargs = kwargs
 
@@ -36,7 +41,10 @@ class OpenAIClient:
         if tools:
             call_kwargs["tools"] = [self._to_oai_tool(t) for t in tools]
 
-        response = await self._client.chat.completions.create(**call_kwargs)
+        response = await asyncio.wait_for(
+            self._client.chat.completions.create(**call_kwargs),
+            timeout=self._timeout,
+        )
         choice = response.choices[0]
         return self._from_oai_choice(choice)
 

@@ -22,7 +22,7 @@ class Settings:
     typing_pause_delay_ms: int = 500
     visual_check_interval_ms: int = 3_000
     visual_change_threshold: float = 0.05
-    capture_timeout_s: int = 15
+    capture_timeout_s: int = 30
 
     # Data retention
     max_retention_days: int = 7
@@ -42,8 +42,7 @@ class Settings:
     llm_model: str = "gemini-3-flash-preview"
 
     # General agent
-    overlay_ws_url: str = "ws://localhost:9321"
-    importance_filter_enabled: bool = False
+    importance_filter_enabled: bool = True
 
     # ElevenLabs TTS
     elevenlabs_api_key: str = field(default_factory=lambda: os.getenv("ELEVENLABS_API_KEY", ""))

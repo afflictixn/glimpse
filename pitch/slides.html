@@ -1,0 +1,662 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;900&display=swap');
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg: #080808;
+    --bg-dark: #040404;
+    --white: #f0f0f0;
+    --gray-light: #b0b0b0;
+    --gray: #777777;
+    --gray-dim: #444444;
+    --gray-dark: #222222;
+    --accent: #6C63FF;
+    --accent2: #00D4AA;
+    --accent3: #FF4757;
+  }
+
+  body { font-family: 'Inter', -apple-system, sans-serif; background: #000; color: var(--white); -webkit-font-smoothing: antialiased; }
+
+  .slide {
+    width: 1920px; height: 1080px; position: relative; overflow: hidden;
+    display: flex; align-items: center; justify-content: center; flex-direction: column;
+    background: var(--bg); margin-bottom: 20px;
+  }
+  .slide::before { content: ''; position: absolute; inset: 0; opacity: 0.03; background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"); background-size: 256px; pointer-events: none; z-index: 1; }
+  .slide::after { content: ''; position: absolute; inset: 0; pointer-events: none; background: radial-gradient(ellipse at center, transparent 35%, rgba(0,0,0,0.5) 100%); z-index: 2; }
+  .slide > * { position: relative; z-index: 3; }
+
+  /* ── 1: AI. ── */
+  .slide-1 .hero-text { font-size: 260px; font-weight: 900; letter-spacing: -12px; color: #fff; }
+
+  /* ── 2: What comes to mind ── */
+  .slide-2 .text-block { text-align: center; line-height: 1.45; }
+  .slide-2 .line1 { font-size: 84px; font-weight: 300; color: #555; }
+  .slide-2 .line2 { font-size: 84px; font-weight: 300; color: #555; }
+  .slide-2 .line2 em { font-style: normal; font-weight: 700; color: var(--white); }
+
+  /* ── 3: Probably this (chats) ── */
+  .slide-3 { justify-content: flex-start; padding-top: 50px; }
+  .slide-3 .top-label { font-size: 38px; font-weight: 300; color: var(--gray-dim); margin-bottom: 32px; }
+  .slide-3 .chat-grid { display: flex; gap: 32px; }
+
+  /* ChatGPT */
+  .chat-gpt { background: #212121; border-radius: 20px; width: 450px; overflow: hidden; border: 1px solid #333; }
+  .chat-gpt .cg-header { padding: 14px 22px; border-bottom: 1px solid #333; display: flex; align-items: center; gap: 10px; }
+  .chat-gpt .cg-dot { width: 26px; height: 26px; border-radius: 50%; background: #10a37f; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; color: #fff; }
+  .chat-gpt .cg-name { font-size: 14px; font-weight: 600; color: #eee; }
+  .chat-gpt .cg-body { padding: 20px 22px; }
+  .chat-gpt .cg-msg { margin-bottom: 14px; font-size: 14px; line-height: 1.5; }
+  .chat-gpt .cg-msg.user { color: #eee; }
+  .chat-gpt .cg-msg.user::before { content: 'You'; display: block; font-size: 11px; font-weight: 600; color: #888; margin-bottom: 3px; }
+  .chat-gpt .cg-msg.bot { color: #ccc; }
+  .chat-gpt .cg-msg.bot::before { content: 'ChatGPT'; display: block; font-size: 11px; font-weight: 600; color: #10a37f; margin-bottom: 3px; }
+  .chat-gpt .cg-input { margin: 0 22px 16px; background: #2f2f2f; border: 1px solid #444; border-radius: 22px; padding: 12px 16px; font-size: 13px; color: #666; }
+
+  /* Claude */
+  .chat-claude { background: #f5f0e8; border-radius: 20px; width: 450px; overflow: hidden; border: 1px solid #e0d8c8; }
+  .chat-claude .cl-header { padding: 14px 22px; border-bottom: 1px solid #e0d8c8; display: flex; align-items: center; gap: 10px; }
+  .chat-claude .cl-dot { width: 26px; height: 26px; border-radius: 50%; background: #d97706; display: flex; align-items: center; justify-content: center; font-size: 14px; color: #fff; }
+  .chat-claude .cl-name { font-size: 14px; font-weight: 600; color: #3d3929; }
+  .chat-claude .cl-body { padding: 20px 22px; }
+  .chat-claude .cl-msg { margin-bottom: 14px; font-size: 14px; line-height: 1.5; }
+  .chat-claude .cl-msg.user { background: #fff; border: 1px solid #e0d8c8; border-radius: 14px; padding: 12px 16px; color: #3d3929; }
+  .chat-claude .cl-msg.bot { color: #5c5440; padding: 0 4px; }
+  .chat-claude .cl-msg.bot::before { content: 'Claude'; display: block; font-size: 11px; font-weight: 600; color: #d97706; margin-bottom: 3px; }
+  .chat-claude .cl-input { margin: 0 22px 16px; background: #fff; border: 1px solid #d8d0c0; border-radius: 22px; padding: 12px 16px; font-size: 13px; color: #aaa; }
+
+  /* Gemini */
+  .chat-gemini { background: #1a1a2e; border-radius: 20px; width: 450px; overflow: hidden; border: 1px solid #2a2a4a; }
+  .chat-gemini .gm-header { padding: 14px 22px; border-bottom: 1px solid #2a2a4a; display: flex; align-items: center; gap: 10px; }
+  .chat-gemini .gm-dot { width: 26px; height: 26px; border-radius: 50%; background: linear-gradient(135deg, #4285f4, #ea4335, #fbbc04, #34a853); }
+  .chat-gemini .gm-name { font-size: 14px; font-weight: 600; color: #ccc; }
+  .chat-gemini .gm-body { padding: 20px 22px; }
+  .chat-gemini .gm-msg { margin-bottom: 14px; font-size: 14px; line-height: 1.5; }
+  .chat-gemini .gm-msg.user { background: #252545; border-radius: 14px; padding: 12px 16px; color: #ddd; }
+  .chat-gemini .gm-msg.bot { color: #aab; padding: 0 4px; }
+  .chat-gemini .gm-msg.bot::before { content: 'Gemini'; display: block; font-size: 11px; font-weight: 600; color: #4285f4; margin-bottom: 3px; }
+  .chat-gemini .gm-input { margin: 0 22px 16px; background: #252545; border: 1px solid #3a3a5a; border-radius: 22px; padding: 12px 16px; font-size: 13px; color: #556; }
+
+  /* ── 4: Who imagines AI ── */
+  .slide-4 .question { font-size: 76px; font-weight: 500; color: var(--white); margin-bottom: 20px; }
+  .slide-4 .sub { font-size: 32px; color: var(--gray-dim); font-style: italic; }
+
+  /* ── 5: Context dump ── */
+  .slide-5 { flex-direction: row; gap: 60px; padding: 0 120px; justify-content: center; }
+  .slide-5 .problem-chat { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 20px; width: 720px; padding: 32px; text-align: left; }
+  .slide-5 .pc-label { font-size: 12px; font-weight: 600; color: #555; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 20px; }
+  .slide-5 .pc-wall { background: #252525; border-radius: 14px; padding: 20px; font-family: 'IBM Plex Mono', monospace; font-size: 11px; line-height: 1.6; color: #ccc; max-height: 520px; overflow: hidden; position: relative; }
+  .slide-5 .pc-wall::after { content: ''; position: absolute; bottom: 0; left: 0; right: 0; height: 120px; background: linear-gradient(transparent, #252525); }
+  .slide-5 .problem-text { max-width: 520px; }
+  .slide-5 .problem-text .pt-line { font-size: 46px; font-weight: 700; color: var(--white); line-height: 1.25; margin-bottom: 24px; }
+  .slide-5 .problem-text .pt-desc { font-size: 22px; color: var(--gray); line-height: 1.6; }
+
+  /* ── 6: It forgets (Anthropic/Claude style) ── */
+  .slide-6 { flex-direction: row; gap: 60px; padding: 0 120px; }
+  .slide-6 .forget-chat { background: #f5f0e8; border: 1px solid #e0d8c8; border-radius: 20px; width: 640px; padding: 32px; text-align: left; }
+  .slide-6 .fc-label { font-size: 12px; font-weight: 600; color: #a09880; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 20px; }
+  .slide-6 .fc-msg { margin-bottom: 16px; font-size: 16px; line-height: 1.55; }
+  .slide-6 .fc-msg.user { background: #fff; border: 1px solid #e0d8c8; border-radius: 14px; padding: 14px 18px; color: #3d3929; margin-left: 120px; }
+  .slide-6 .fc-msg.bot { background: transparent; border-radius: 14px; padding: 14px 18px; color: #5c5440; margin-right: 120px; }
+  .slide-6 .fc-msg.bot::before { content: 'Claude'; display: block; font-size: 11px; font-weight: 600; color: #d97706; margin-bottom: 4px; }
+  .slide-6 .fc-msg.bot .warning { color: #c0392b; font-weight: 600; }
+  .slide-6 .forget-text { max-width: 520px; }
+  .slide-6 .forget-text .ft-line { font-size: 48px; font-weight: 700; color: var(--white); line-height: 1.25; margin-bottom: 24px; }
+  .slide-6 .forget-text .ft-desc { font-size: 22px; color: var(--gray); line-height: 1.6; }
+
+  /* ── 7: Never comes to you ── */
+  .slide-7 { flex-direction: row; gap: 80px; padding: 0 160px; }
+  .slide-7 .idle-visual { width: 500px; text-align: center; }
+  .slide-7 .idle-box { background: #141414; border: 1px solid #252525; border-radius: 20px; padding: 60px 40px; }
+  .slide-7 .idle-cursor { font-size: 64px; margin-bottom: 20px; opacity: 0.4; }
+  .slide-7 .idle-input { background: #1e1e1e; border: 1px solid #333; border-radius: 24px; padding: 18px 24px; font-size: 18px; color: #444; text-align: left; }
+  .slide-7 .idle-input .blink { display: inline-block; width: 2px; height: 20px; background: #555; margin-left: 2px; vertical-align: middle; }
+  .slide-7 .idle-text { max-width: 520px; }
+  .slide-7 .idle-text .it-line { font-size: 48px; font-weight: 700; color: var(--white); line-height: 1.25; margin-bottom: 24px; }
+  .slide-7 .idle-text .it-desc { font-size: 22px; color: var(--gray); line-height: 1.6; }
+
+  /* ── 8: Not revolutionary ── */
+  .slide-8 .text-block { text-align: center; line-height: 1.5; }
+  .slide-8 .line { font-size: 88px; font-weight: 300; color: #3a3a3a; }
+  .slide-8 .strike { font-size: 96px; font-weight: 900; color: var(--accent3); text-decoration: line-through; text-decoration-thickness: 6px; }
+
+  /* ── 9: Doesn't have to be ── */
+  .slide-9 .text-block { text-align: center; line-height: 1.5; }
+  .slide-9 .line { font-size: 92px; font-weight: 300; color: var(--gray); }
+
+  /* ── 10-12: Z reveal ── */
+  .slide-10, .slide-11, .slide-12 { background: var(--bg-dark); }
+  .slide-10 .label { font-size: 28px; font-weight: 400; color: var(--gray-dim); letter-spacing: 12px; text-transform: uppercase; }
+  .slide-11 .z-hero, .slide-12 .z-hero {
+    font-size: 380px; font-weight: 900; letter-spacing: -15px; color: #fff;
+    line-height: 0.85; text-shadow: 0 0 120px rgba(255,255,255,0.08);
+  }
+  .slide-12 .subtitle { font-size: 32px; font-weight: 300; color: var(--gray-dim); letter-spacing: 20px; margin-top: 16px; }
+
+  /* ── 13: XYZ tagline ── */
+  .slide-13 { background: var(--bg-dark); }
+  .slide-13 .tagline { text-align: center; line-height: 1.5; }
+  .slide-13 .xy { font-size: 96px; font-weight: 300; color: #444; letter-spacing: -2px; }
+  .slide-13 .z-line { font-size: 96px; }
+  .slide-13 .z-letter { font-weight: 900; color: #fff; }
+  .slide-13 .rest { font-weight: 700; color: #fff; }
+
+  /* ── 14: How it works ── */
+  .slide-14 { padding: 0 180px; }
+  .slide-14 .how-steps { display: flex; gap: 20px; justify-content: center; align-items: flex-start; margin-bottom: 60px; }
+  .slide-14 .how-step { text-align: center; flex: 1; max-width: 420px; }
+  .slide-14 .how-num { font-size: 13px; font-weight: 600; color: var(--gray-dim); letter-spacing: 3px; text-transform: uppercase; margin-bottom: 18px; }
+  .slide-14 .how-icon { font-size: 28px; color: #fff; margin-bottom: 18px; font-family: 'IBM Plex Mono', monospace; }
+  .slide-14 .how-title { font-size: 38px; font-weight: 700; color: var(--white); margin-bottom: 16px; line-height: 1.3; }
+  .slide-14 .how-desc { font-size: 22px; color: var(--gray); line-height: 1.6; }
+  .slide-14 .how-arrow { display: flex; align-items: center; justify-content: center; font-size: 28px; color: #333; padding-top: 50px; flex-shrink: 0; width: 50px; }
+  .slide-14 .how-footer { text-align: center; font-size: 24px; color: var(--gray-dim); }
+  .slide-14 .how-footer strong { color: var(--white); }
+
+  /* ── USE CASE SLIDES ── */
+  .usecase-slide { background: #0c0c0c; flex-direction: row; padding: 0; }
+  .uc-desktop { width: 1100px; height: 1080px; background: #1a1a2e; position: relative; overflow: hidden; }
+  .uc-menubar { height: 32px; background: rgba(0,0,0,0.7); display: flex; align-items: center; padding: 0 16px; font-size: 13px; font-weight: 500; color: #ddd; gap: 20px; }
+  .uc-menubar .bold { font-weight: 700; }
+  .uc-menubar .right { margin-left: auto; color: #aaa; font-size: 12px; }
+  .uc-window { position: absolute; top: 52px; left: 40px; right: 40px; bottom: 40px; background: #1c1c1e; border-radius: 12px; overflow: hidden; border: 1px solid #333; box-shadow: 0 20px 60px rgba(0,0,0,0.5); }
+  .uc-window-bar { height: 36px; background: #2a2a2e; display: flex; align-items: center; padding: 0 16px; gap: 8px; }
+  .uc-window-bar .dot { width: 12px; height: 12px; border-radius: 50%; }
+  .uc-window-bar .dot.r { background: #ff5f57; }
+  .uc-window-bar .dot.y { background: #ffbd2e; }
+  .uc-window-bar .dot.g { background: #28c840; }
+  .uc-window-bar .win-title { margin-left: 12px; font-size: 13px; color: #888; }
+  .uc-window-content { padding: 32px; font-size: 15px; line-height: 1.7; color: #bbb; }
+  .uc-overlay { width: 820px; height: 1080px; display: flex; align-items: center; justify-content: center; position: relative; }
+  .z-panel { width: 680px; background: #111115; border: 1px solid #252530; border-radius: 20px; padding: 36px; box-shadow: 0 24px 80px rgba(0,0,0,0.3); }
+  .z-panel-header { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; padding-bottom: 18px; border-bottom: 1px solid #1e1e28; }
+  .z-panel-logo { width: 36px; height: 36px; border-radius: 10px; background: #1e1e24; display: flex; align-items: center; justify-content: center; font-size: 18px; font-weight: 900; color: #fff; border: 1px solid #333; }
+  .z-panel-name { font-size: 16px; font-weight: 600; color: #ccc; }
+  .z-panel-badge { margin-left: auto; font-size: 11px; font-weight: 600; color: var(--accent2); background: rgba(0,212,170,0.1); padding: 4px 10px; border-radius: 6px; text-transform: uppercase; letter-spacing: 1px; }
+  .z-panel-body { font-size: 16px; line-height: 1.7; color: #bbb; }
+  .z-panel-body strong { color: var(--white); font-weight: 600; }
+  .z-panel-body .z-highlight { background: rgba(108,99,255,0.08); border-left: 3px solid var(--accent); padding: 14px 18px; border-radius: 0 10px 10px 0; margin: 16px 0; font-size: 15px; color: #ccc; }
+  .z-panel-body .z-warning { background: rgba(255,71,87,0.08); border-left: 3px solid var(--accent3); padding: 14px 18px; border-radius: 0 10px 10px 0; margin: 16px 0; font-size: 15px; color: #daa; }
+  .z-panel-body .z-action { display: inline-block; margin-top: 16px; padding: 10px 24px; background: #fff; color: #111; border-radius: 10px; font-size: 14px; font-weight: 600; }
+  .z-panel-body .z-action.danger { background: var(--accent3); color: #fff; }
+  .uc-label { position: absolute; top: 36px; right: 40px; font-size: 13px; font-weight: 600; letter-spacing: 3px; text-transform: uppercase; z-index: 5; color: var(--gray-dim); }
+
+  /* Slide 15: slides app */
+  .slides-content { padding: 40px !important; }
+  .slides-content .slide-title-fake { font-size: 28px; font-weight: 700; color: #fff; margin-bottom: 24px; }
+  .slides-content .slide-bullets { font-size: 18px; color: #999; line-height: 2.2; }
+  .slides-content .slide-bullets .typed { color: #eee; }
+  .slides-content .cursor-line { display: inline-block; width: 2px; height: 22px; background: #fff; vertical-align: middle; margin-left: 3px; }
+
+  /* Slide 16: full iMessage */
+  .imsg-full { padding: 0 !important; background: #000 !important; display: flex; flex-direction: column; height: 100%; }
+  .imsg-sidebar { width: 280px; background: #1c1c1e; border-right: 1px solid #333; position: absolute; left: 0; top: 36px; bottom: 0; padding: 16px; }
+  .imsg-sidebar-item { display: flex; align-items: center; gap: 12px; padding: 12px; border-radius: 10px; margin-bottom: 4px; }
+  .imsg-sidebar-item.active { background: #2c2c2e; }
+  .imsg-sidebar-avatar { width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 16px; font-weight: 700; color: #fff; }
+  .imsg-sidebar-text { flex: 1; }
+  .imsg-sidebar-name { font-size: 14px; font-weight: 600; color: #fff; }
+  .imsg-sidebar-preview { font-size: 12px; color: #666; margin-top: 2px; }
+  .imsg-sidebar-time { font-size: 11px; color: #555; }
+  .imsg-main { margin-left: 280px; display: flex; flex-direction: column; height: calc(100% - 36px); position: absolute; top: 36px; right: 0; left: 0; }
+  .imsg-main-header { padding: 16px 20px; background: #1c1c1e; border-bottom: 1px solid #333; display: flex; align-items: center; gap: 12px; margin-left: 280px; }
+  .imsg-main-avatar { width: 36px; height: 36px; border-radius: 50%; background: #5856d6; display: flex; align-items: center; justify-content: center; font-size: 16px; font-weight: 700; color: #fff; }
+  .imsg-main-name { font-size: 16px; font-weight: 600; color: #fff; }
+  .imsg-main-body { flex: 1; padding: 24px 24px 24px 304px; overflow: hidden; }
+  .imsg { max-width: 380px; padding: 12px 16px; border-radius: 18px; margin-bottom: 8px; font-size: 16px; line-height: 1.45; }
+  .imsg.them { background: #333; color: #fff; border-bottom-left-radius: 6px; }
+  .imsg.me { background: #0b84fe; color: #fff; margin-left: auto; border-bottom-right-radius: 6px; text-align: right; }
+  .imsg-time { font-size: 11px; color: #666; text-align: center; margin: 16px 0 12px; }
+  .imsg-input-bar { margin-left: 280px; padding: 12px 20px; border-top: 1px solid #333; }
+  .imsg-input-field { background: #2c2c2e; border: 1px solid #444; border-radius: 20px; padding: 10px 16px; font-size: 14px; color: #666; }
+
+  /* Slide 17: browser phishing */
+  .browser-content { padding: 0 !important; display: flex; flex-direction: column; height: 100%; }
+  .browser-bar { height: 44px; background: #2a2a2e; display: flex; align-items: center; padding: 0 16px; gap: 12px; flex-shrink: 0; }
+  .browser-url { flex: 1; background: #1a1a1e; border-radius: 8px; padding: 8px 14px; font-size: 13px; font-family: 'IBM Plex Mono', monospace; color: #aaa; }
+  .browser-url .sus { color: var(--accent3); font-weight: 600; }
+  .browser-page { flex: 1; padding: 60px 80px; background: #f5f5f5; color: #333; }
+  .browser-page .fake-logo { font-size: 36px; font-weight: 700; color: #1a73e8; margin-bottom: 40px; }
+  .browser-page .fake-form { background: #fff; border: 1px solid #ddd; border-radius: 12px; padding: 40px; max-width: 460px; }
+  .browser-page .fake-form .ff-title { font-size: 24px; font-weight: 600; color: #333; margin-bottom: 8px; }
+  .browser-page .fake-form .ff-sub { font-size: 15px; color: #888; margin-bottom: 28px; }
+  .browser-page .fake-input { width: 100%; border: 1px solid #ddd; border-radius: 8px; padding: 14px 16px; font-size: 15px; color: #333; margin-bottom: 16px; background: #fafafa; }
+  .browser-page .fake-btn { background: #1a73e8; color: #fff; border: none; border-radius: 8px; padding: 14px 36px; font-size: 15px; font-weight: 600; margin-top: 12px; }
+  .browser-page .fake-links { margin-top: 20px; font-size: 14px; color: #1a73e8; }
+
+  /* ── 18: Demo ── */
+  .slide-18 { background: var(--bg-dark); }
+  .slide-18 .text-block { text-align: center; line-height: 1.5; margin-bottom: 50px; }
+  .slide-18 .z-name { font-size: 88px; font-weight: 900; color: #fff; }
+  .slide-18 .line { font-size: 76px; font-weight: 300; color: #555; }
+  .slide-18 .line-bold { font-size: 76px; font-weight: 700; color: var(--white); }
+  .slide-18 .demo-badge { display: inline-block; padding: 20px 64px; border: 2px solid #fff; border-radius: 999px; color: #fff; font-size: 22px; font-weight: 600; letter-spacing: 8px; text-transform: uppercase; }
+
+  /* ── 19: Pillars ── */
+  .slide-19 { background: var(--bg-dark); }
+  .closing-cols { display: flex; gap: 100px; justify-content: center; }
+  .closing-col { text-align: center; width: 420px; }
+  .closing-col .cc-word { font-size: 60px; font-weight: 900; color: #fff; margin-bottom: 20px; }
+  .closing-col .cc-desc { font-size: 22px; color: var(--gray); line-height: 1.7; }
+
+  /* ── 20: Your AI that knows you ── */
+  .slide-20 { background: var(--bg-dark); }
+  .slide-20 .knows-text { text-align: center; line-height: 1.4; }
+  .slide-20 .knows-line1 { font-size: 72px; font-weight: 300; color: #444; }
+  .slide-20 .knows-line2 { font-size: 96px; font-weight: 900; color: #fff; }
+
+  /* ── 21: Z Experience ── */
+  .slide-21 { background: var(--bg-dark); }
+  .slide-21 .z-final { font-size: 380px; font-weight: 900; color: #fff; letter-spacing: -15px; line-height: 0.85; text-shadow: 0 0 120px rgba(255,255,255,0.06); }
+  .slide-21 .z-final-sub { font-size: 32px; font-weight: 300; color: var(--gray-dim); letter-spacing: 20px; margin-top: 20px; }
+</style>
+</head>
+<body>
+
+<!-- 1 -->
+<div class="slide slide-1" id="slide-1">
+  <div class="hero-text">AI.</div>
+</div>
+
+<!-- 2 -->
+<div class="slide slide-2" id="slide-2">
+  <div class="text-block">
+    <div class="line1">What comes to mind</div>
+    <div class="line2">when you see <em>this word</em>?</div>
+  </div>
+</div>
+
+<!-- 3 — more messages -->
+<div class="slide slide-3" id="slide-3">
+  <div class="top-label">Probably this.</div>
+  <div class="chat-grid">
+    <div class="chat-gpt">
+      <div class="cg-header"><div class="cg-dot">G</div><div class="cg-name">ChatGPT</div></div>
+      <div class="cg-body">
+        <div class="cg-msg user">Can you plan a 3-day trip to Tokyo? I like street food and hidden spots, not touristy stuff</div>
+        <div class="cg-msg bot">Here's a curated 3-day Tokyo itinerary focused on local gems and incredible street food. Day 1: Start in Yanaka Ginza for the nostalgic shopping street, then...</div>
+        <div class="cg-msg user">Nice! What about Day 2? Can we do Shibuya but avoid the crowds?</div>
+        <div class="cg-msg bot">Day 2: Hit Shibuya early morning before 9am. Start at Nonbei Yokocho (Drunkard's Alley) for a quiet walk, then the backstreets of Tomigaya for...</div>
+        <div class="cg-msg user">Oh also what's the best ramen near Shinjuku station?</div>
+        <div class="cg-msg bot">For Shinjuku ramen, you'll want Fuunji (tsukemen style) - there's always a line but it moves fast. It's a 3-minute walk from...</div>
+      </div>
+      <div class="cg-input">Message ChatGPT...</div>
+    </div>
+    <div class="chat-claude">
+      <div class="cl-header"><div class="cl-dot">C</div><div class="cl-name">Claude</div></div>
+      <div class="cl-body">
+        <div class="cl-msg user">Review this PR and tell me if the auth middleware handles token refresh correctly</div>
+        <div class="cl-msg bot">I'll analyze the PR. Looking at the middleware flow, there's a potential race condition in the token refresh logic on line 47. If two requests arrive simultaneously with an expired token...</div>
+        <div class="cl-msg user">Good catch. How would you fix the race condition?</div>
+        <div class="cl-msg bot">I'd recommend implementing a mutex or using Redis to create a lock around the refresh operation. Here's the approach: first, check if a refresh is already in progress...</div>
+        <div class="cl-msg user">Makes sense. Can you write the Redis lock implementation?</div>
+        <div class="cl-msg bot">Here's a Redis-based distributed lock for the token refresh. I'm using the SETNX pattern with an expiry to prevent deadlocks...</div>
+      </div>
+      <div class="cl-input">Reply to Claude...</div>
+    </div>
+    <div class="chat-gemini">
+      <div class="gm-header"><div class="gm-dot"></div><div class="gm-name">Gemini</div></div>
+      <div class="gm-body">
+        <div class="gm-msg user">What's the difference between a 401 and a 403 response?</div>
+        <div class="gm-msg bot">A 401 means "who are you?" (unauthenticated), while a 403 means "I know who you are, but you can't do that" (unauthorized).</div>
+        <div class="gm-msg user">So if a user's JWT is expired, is that a 401 or 403?</div>
+        <div class="gm-msg bot">That's a 401. The user was authenticated but their proof of identity (the JWT) is no longer valid. They need to re-authenticate.</div>
+        <div class="gm-msg user">What about if they have a valid token but try to access an admin endpoint?</div>
+        <div class="gm-msg bot">That's a classic 403 Forbidden. Their identity is confirmed (valid token) but their role doesn't have permission for that resource.</div>
+      </div>
+      <div class="gm-input">Ask Gemini...</div>
+    </div>
+  </div>
+</div>
+
+<!-- 4 -->
+<div class="slide slide-4" id="slide-4">
+  <div class="question">Who here imagines AI like this?</div>
+  <div class="sub">raise your hand</div>
+</div>
+
+<!-- 5 -->
+<div class="slide slide-5" id="slide-5">
+  <div class="problem-chat">
+    <div class="pc-label">Every single conversation</div>
+    <div class="pc-wall">Here is my full codebase for context:
+
+// src/auth/middleware.ts
+import { NextRequest, NextResponse } from 'next/server';
+import { verifyToken, refreshToken } from './jwt';
+import { UserSession, AuthConfig } from './types';
+import { redis } from '../lib/redis';
+
+export async function authMiddleware(req: NextRequest) {
+  const token = req.cookies.get('session_token')?.value;
+  const refreshTk = req.cookies.get('refresh_token')?.value;
+
+  if (!token) {
+    return NextResponse.redirect(new URL('/login', req.url));
+  }
+
+  try {
+    const session = await verifyToken&lt;UserSession&gt;(token);
+    if (session.exp &lt; Date.now() / 1000) {
+      if (!refreshTk) {
+        return NextResponse.redirect(new URL('/login', req.url));
+      }
+      const newSession = await refreshToken(refreshTk);
+      const response = NextResponse.next();
+      response.cookies.set('session_token', newSession.token);
+      return response;
+    }
+    const cached = await redis.get(`session:${session.userId}`);
+    if (!cached) {
+      await redis.set(`session:${session.userId}`,
+        JSON.stringify(session), 'EX', 3600);
+    }
+    return NextResponse.next();
+  } catch (err) {
+    console.error('Auth middleware error:', err);
+    return NextResponse.redirect(new URL('/login', req.url));
+  }
+}
+
+// src/auth/jwt.ts
+import jwt from 'jsonwebtoken';
+
+const SECRET = process.env.JWT_SECRET!;
+const REFRESH_SECRET = process.env.JWT_REFRESH_SECRET!;
+
+export function verifyToken&lt;T&gt;(token: string): T {
+  return jwt.verify(token, SECRET) as T;
+}
+
+export async function refreshToken(refresh: string) {
+  const payload = jwt.verify(refresh, REFRESH_SECRET);
+  const newToken = jwt.sign(
+    { userId: payload.userId, role: payload.role },
+    SECRET, { expiresIn: '1h' }
+  );
+  return { token: newToken, userId: payload.userId };
+}
+
+// And my database schema...
+// And my test files...
+// And the deployment config...</div>
+  </div>
+  <div class="problem-text">
+    <div class="pt-line">You type the entire context.<br>Every. Single. Time.</div>
+    <div class="pt-desc">Before AI can help you, you need to explain everything. Paste your code, describe the setup, give it the full picture. And you do this every. single. session.</div>
+  </div>
+</div>
+
+<!-- 6 -->
+<div class="slide slide-6" id="slide-6">
+  <div class="forget-chat">
+    <div class="fc-label">New session</div>
+    <div class="fc-msg user">Hey remember that auth middleware bug we fixed last week? It's back.</div>
+    <div class="fc-msg bot"><span class="warning">I don't have access to previous conversations.</span> Could you share the relevant code and describe the issue you're experiencing?</div>
+    <div class="fc-msg user">...seriously?</div>
+  </div>
+  <div class="forget-text">
+    <div class="ft-line">"When did we<br>talk about that?"</div>
+    <div class="ft-desc">Every conversation starts from zero. The AI you spent an hour with yesterday has no idea who you are today.</div>
+  </div>
+</div>
+
+<!-- 7 -->
+<div class="slide slide-7" id="slide-7">
+  <div class="idle-visual">
+    <div class="idle-box">
+      <div class="idle-cursor">|</div>
+      <div class="idle-input">Ask me anything...<span class="blink"></span></div>
+    </div>
+  </div>
+  <div class="idle-text">
+    <div class="it-line">You always have<br>to ask first.</div>
+    <div class="it-desc">AI just sits there. Waiting for your input. It never reaches out. It never notices what you're doing. It never comes to you.</div>
+  </div>
+</div>
+
+<!-- 8 -->
+<div class="slide slide-8" id="slide-8">
+  <div class="text-block">
+    <div class="line">Doesn't feel quite</div>
+    <div class="strike">revolutionary</div>
+    <div class="line">right?</div>
+  </div>
+</div>
+
+<!-- 9 -->
+<div class="slide slide-9" id="slide-9">
+  <div class="text-block">
+    <div class="line">It doesn't have to</div>
+    <div class="line">be like this.</div>
+  </div>
+</div>
+
+<!-- 10 -->
+<div class="slide slide-10" id="slide-10">
+  <div class="label">INTRODUCING</div>
+</div>
+
+<!-- 11 -->
+<div class="slide slide-11" id="slide-11">
+  <div class="z-hero">Z</div>
+</div>
+
+<!-- 12 -->
+<div class="slide slide-12" id="slide-12">
+  <div class="z-hero">Z</div>
+  <div class="subtitle">EXPERIENCE</div>
+</div>
+
+<!-- 13 -->
+<div class="slide slide-13" id="slide-13">
+  <div class="tagline">
+    <div class="xy">You do X and Y.</div>
+    <div class="z-line"><span class="z-letter">Z</span> <span class="rest">does the rest.</span></div>
+  </div>
+</div>
+
+<!-- 14 -->
+<div class="slide slide-14" id="slide-14">
+  <div class="how-steps">
+    <div class="how-step">
+      <div class="how-icon">[  ]</div>
+      <div class="how-title">Z sees your screen.</div>
+      <div class="how-desc">It watches what's happening on your desktop in the background. Apps, messages, websites.</div>
+    </div>
+    <div class="how-arrow">&rarr;</div>
+    <div class="how-step">
+      <div class="how-icon">{..}</div>
+      <div class="how-title">It understands what you're doing.</div>
+      <div class="how-desc">Local AI reads the screen, builds context, and connects it to everything it's seen before.</div>
+    </div>
+    <div class="how-arrow">&rarr;</div>
+    <div class="how-step">
+      <div class="how-icon">>>></div>
+      <div class="how-title">It helps &mdash; before you ask.</div>
+      <div class="how-desc">Z surfaces the right info at the right moment. No prompts. No copy-paste. It just appears.</div>
+    </div>
+  </div>
+  <div class="how-footer">Runs <strong>locally on your machine</strong> with cloud reasoning when you need it.</div>
+</div>
+
+<!-- 15 — Proactive -->
+<div class="slide usecase-slide" id="slide-15">
+  <div class="uc-label">PROACTIVE</div>
+  <div class="uc-desktop">
+    <div class="uc-menubar"><span class="bold">Keynote</span><span>File</span><span>Edit</span><span>View</span><span>Insert</span><span class="right">Fri 3:42 PM</span></div>
+    <div class="uc-window">
+      <div class="uc-window-bar"><div class="dot r"></div><div class="dot y"></div><div class="dot g"></div><div class="win-title">Q2 Product Strategy.key</div></div>
+      <div class="uc-window-content slides-content">
+        <div class="slide-title-fake">Q2 Product Roadmap</div>
+        <div class="slide-bullets">
+          <div class="typed">- Mobile app redesign (March launch)</div>
+          <div class="typed">- API v3 migration timeline</div>
+          <div class="typed">- New onboarding flow A/B test results</div>
+          <div class="typed">- Revenue targets and growth metr<span class="cursor-line"></span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="uc-overlay">
+    <div class="z-panel">
+      <div class="z-panel-header"><div class="z-panel-logo">Z</div><div class="z-panel-name">Z</div><div class="z-panel-badge">Suggestion</div></div>
+      <div class="z-panel-body">
+        I see you're building out the <strong>Q2 roadmap deck</strong>. A few things that might help:
+        <div class="z-highlight">Your last meeting notes from Tuesday mentioned the <strong>onboarding A/B test showed a 23% improvement</strong> in activation rate. Want me to pull that data in?</div>
+        Also &mdash; the API v3 migration doc you reviewed yesterday had a revised timeline. The new target is <strong>April 15</strong>, not March 30.
+        <br><br><span class="z-action">Insert meeting notes</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 16 — Caring (full iMessage) -->
+<div class="slide usecase-slide" id="slide-16">
+  <div class="uc-label">CARING</div>
+  <div class="uc-desktop" style="background: #000;">
+    <div class="uc-menubar"><span class="bold">Messages</span><span>File</span><span>Edit</span><span>View</span><span class="right">Fri 4:17 PM</span></div>
+    <div class="uc-window" style="background: #000;">
+      <div class="uc-window-bar"><div class="dot r"></div><div class="dot y"></div><div class="dot g"></div><div class="win-title">Messages</div></div>
+      <div class="uc-window-content imsg-full">
+        <!-- sidebar -->
+        <div class="imsg-sidebar">
+          <div class="imsg-sidebar-item active">
+            <div class="imsg-sidebar-avatar" style="background: #5856d6;">A</div>
+            <div class="imsg-sidebar-text"><div class="imsg-sidebar-name">Alice</div><div class="imsg-sidebar-preview">hey yo!! how you been?</div></div>
+            <div class="imsg-sidebar-time">4:17 PM</div>
+          </div>
+          <div class="imsg-sidebar-item">
+            <div class="imsg-sidebar-avatar" style="background: #30d158;">M</div>
+            <div class="imsg-sidebar-text"><div class="imsg-sidebar-name">Mom</div><div class="imsg-sidebar-preview">Don't forget dinner Sunday</div></div>
+            <div class="imsg-sidebar-time">2:30 PM</div>
+          </div>
+          <div class="imsg-sidebar-item">
+            <div class="imsg-sidebar-avatar" style="background: #ff9f0a;">D</div>
+            <div class="imsg-sidebar-text"><div class="imsg-sidebar-name">David</div><div class="imsg-sidebar-preview">did you see the game last ni...</div></div>
+            <div class="imsg-sidebar-time">Yesterday</div>
+          </div>
+          <div class="imsg-sidebar-item">
+            <div class="imsg-sidebar-avatar" style="background: #64d2ff;">W</div>
+            <div class="imsg-sidebar-text"><div class="imsg-sidebar-name">Work Group</div><div class="imsg-sidebar-preview">standup at 10 tomorrow</div></div>
+            <div class="imsg-sidebar-time">Yesterday</div>
+          </div>
+        </div>
+        <!-- main chat -->
+        <div class="imsg-main-header">
+          <div class="imsg-main-avatar">A</div>
+          <div class="imsg-main-name">Alice</div>
+        </div>
+        <div class="imsg-main-body">
+          <div class="imsg-time">March 12</div>
+          <div class="imsg them">have you tried Pitch for presentations?</div>
+          <div class="imsg me">yeah it's pretty good actually, you should try it for your team</div>
+          <div class="imsg them">ok will do! how's the side project going?</div>
+          <div class="imsg me">almost done, just fixing the overlay animations</div>
+          <div class="imsg-time">Today 4:17 PM</div>
+          <div class="imsg them">hey yo!! how you been?</div>
+          <div class="imsg them">feels like forever lol</div>
+          <div class="imsg them">btw did you ever finish that project thing you were telling me about?</div>
+        </div>
+        <div class="imsg-input-bar"><div class="imsg-input-field">iMessage</div></div>
+      </div>
+    </div>
+  </div>
+  <div class="uc-overlay">
+    <div class="z-panel">
+      <div class="z-panel-header"><div class="z-panel-logo">Z</div><div class="z-panel-name">Z</div><div class="z-panel-badge">Context</div></div>
+      <div class="z-panel-body">
+        <strong>Alice</strong> just messaged you. Here's some context from your recent history:
+        <div class="z-highlight">Last time you two talked <strong>(March 12)</strong>, she mentioned she was looking into <strong>presentation tools for her team</strong>. You recommended Pitch and she said she'd try it.</div>
+        She also asked about your side project &mdash; you told her it was <strong>"almost done, just fixing the overlay animations."</strong>
+        <br><br>You might want to follow up on whether she tried Pitch.
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 17 — Private (phishing) -->
+<div class="slide usecase-slide" id="slide-17">
+  <div class="uc-label">PRIVATE</div>
+  <div class="uc-desktop">
+    <div class="uc-menubar"><span class="bold">Safari</span><span>File</span><span>Edit</span><span>View</span><span class="right">Fri 5:03 PM</span></div>
+    <div class="uc-window">
+      <div class="uc-window-bar"><div class="dot r"></div><div class="dot y"></div><div class="dot g"></div><div class="win-title">Safari</div></div>
+      <div class="uc-window-content browser-content">
+        <div class="browser-bar"><div class="browser-url">https://<span class="sus">gooogle-accounts.com</span>/signin/v2/challenge</div></div>
+        <div class="browser-page">
+          <div class="fake-logo">Google</div>
+          <div class="fake-form">
+            <div class="ff-title">Sign in</div>
+            <div class="ff-sub">Use your Google Account</div>
+            <div class="fake-input">Email or phone</div>
+            <div class="fake-input">Password</div>
+            <div class="fake-btn">Next</div>
+            <div class="fake-links">Forgot email? &nbsp;&middot;&nbsp; Create account</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="uc-overlay">
+    <div class="z-panel">
+      <div class="z-panel-header"><div class="z-panel-logo">Z</div><div class="z-panel-name">Z</div><div class="z-panel-badge" style="color: var(--accent3); background: rgba(255,71,87,0.1);">Warning</div></div>
+      <div class="z-panel-body">
+        <div class="z-warning"><strong>This doesn't look right.</strong><br><br>This site is pretending to be Google, but the domain is <strong style="color: var(--accent3);">gooogle-accounts.com</strong> &mdash; that's not a real Google domain.<br><br>The real sign-in page is at <strong>accounts.google.com</strong>.</div>
+        This looks like a <strong>phishing attempt</strong>. I'd recommend not entering any credentials here.
+        <br><br><span class="z-action danger">Close this tab</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 18 — Demo -->
+<div class="slide slide-18" id="slide-18">
+  <div class="text-block">
+    <div class="z-name">Z,</div>
+    <div class="line">how about you just</div>
+    <div class="line-bold">introduce yourself?</div>
+  </div>
+  <div class="demo-badge">LIVE DEMO</div>
+</div>
+
+<!-- 19 — Pillars -->
+<div class="slide slide-19" id="slide-19">
+  <div class="closing-cols">
+    <div class="closing-col">
+      <div class="cc-word">Proactive.</div>
+      <div class="cc-desc">Sees what you're doing.<br>Helps before you ask.</div>
+    </div>
+    <div class="closing-col">
+      <div class="cc-word">Caring.</div>
+      <div class="cc-desc">Remembers everything.<br>Every session builds on the last.</div>
+    </div>
+    <div class="closing-col">
+      <div class="cc-word">Private.</div>
+      <div class="cc-desc">Local models on your machine.<br>Cloud reasoning when you need it.</div>
+    </div>
+  </div>
+</div>
+
+<!-- 20 — Your AI that knows you -->
+<div class="slide slide-20" id="slide-20">
+  <div class="knows-text">
+    <div class="knows-line1">Your AI that actually</div>
+    <div class="knows-line2">knows you.</div>
+  </div>
+</div>
+
+<!-- 21 — Z Experience -->
+<div class="slide slide-21" id="slide-21">
+  <div class="z-final">Z</div>
+  <div class="z-final-sub">EXPERIENCE</div>
+</div>
+
+</body>
+</html>

@@ -51,12 +51,11 @@ async def tools(db: DatabaseManager) -> ToolRegistry:
 
 @pytest_asyncio.fixture
 async def agent(db: DatabaseManager, tools: ToolRegistry) -> GeneralAgent:
+    llm = OllamaChat(base_url="http://localhost:11434", model="gemma3:12b")
     return GeneralAgent(
         db=db,
         tools=tools,
-        overlay_ws_url="ws://localhost:19321",
-        ollama_base_url="http://localhost:11434",
-        ollama_model="gemma3:12b",
+        llm=llm,
     )
 
 
@@ -560,14 +559,12 @@ class TestOllamaLive:
 
         tools.call = tracking_call  # type: ignore[assignment]
 
+        llm = OllamaChat(base_url="http://localhost:11434", model="gemma3:12b")
         agent = GeneralAgent(
             db=db,
             tools=tools,
-            overlay_ws_url="ws://localhost:19321",
-            ollama_base_url="http://localhost:11434",
-            ollama_model="gemma3:12b",
+            llm=llm,
         )
-        agent._ws_send = AsyncMock()
 
         result = await agent.chat(
             "Use the db_query tool to search my screen history (ocr table) for 'headphones'. What did you find?"
@@ -600,14 +597,12 @@ class TestOllamaLive:
 
         tools.call = tracking_call  # type: ignore[assignment]
 
+        llm = OllamaChat(base_url="http://localhost:11434", model="gemma3:12b")
         agent = GeneralAgent(
             db=db,
             tools=tools,
-            overlay_ws_url="ws://localhost:19321",
-            ollama_base_url="http://localhost:11434",
-            ollama_model="gemma3:12b",
+            llm=llm,
         )
-        agent._ws_send = AsyncMock()
 
         result = await agent.chat(
             "Use the memory_query tool to check if you have any saved product memories. What products do you remember?"

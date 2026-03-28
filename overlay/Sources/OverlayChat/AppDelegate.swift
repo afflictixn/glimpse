@@ -17,7 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var overlayState: OverlayState!
     private var chatViewModel: ChatViewModel!
-    private var wsServer: WebSocketServer!
+    private var wsClient: WebSocketClient!
     private var calendarServer: CalendarServer!
     private var eventMonitor: EventMonitor!
     private var captureManager: CaptureManager!
@@ -260,11 +260,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         })
     }
 
-    // MARK: - WebSocket Server (receives from Python backend)
+    // MARK: - WebSocket Client (receives from Python backend)
 
     private func setupWebSocket() {
-        wsServer = WebSocketServer(port: 9321)
-        wsServer.onMessage = { [weak self] message in
+        wsClient = WebSocketClient(url: URL(string: "ws://localhost:3030/ws")!)
+        wsClient.onMessage = { [weak self] message in
             Task { @MainActor in
                 guard let self else { return }
                 // Feed to chat view model (existing behavior)
@@ -283,7 +283,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
-        wsServer.start()
+        wsClient.start()
     }
 
     // MARK: - Status Bar
@@ -381,7 +381,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func quitApp() {
         eventMonitor.stop()
-        wsServer.stop()
+        wsClient.stop()
         calendarServer.stop()
         NSApp.terminate(nil)
     }

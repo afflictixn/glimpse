@@ -1,6 +1,7 @@
 """Gemini provider — translates between internal types and the google-genai SDK."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from typing import Any
@@ -13,12 +14,16 @@ from src.llm.types import Message, ToolCall, ToolSpec
 logger = logging.getLogger(__name__)
 
 
+_DEFAULT_TIMEOUT = 30
+
+
 class GeminiClient:
     """LLMClient implementation backed by the Google GenAI SDK."""
 
     def __init__(self, model: str = "gemini-2.0-flash", **kwargs: Any) -> None:
         self._model = model
         api_key: str | None = kwargs.pop("api_key", None)
+        self._timeout: float = kwargs.pop("timeout", _DEFAULT_TIMEOUT)
         self._client = genai.Client(api_key=api_key)
         self._extra_kwargs = kwargs
 
@@ -46,10 +51,13 @@ class GeminiClient:
         )
         config = gtypes.GenerateContentConfig(**config_kwargs)
 
-        response = await self._client.aio.models.generate_content(
-            model=self._model,
-            contents=contents,
-            config=config,
+        response = await asyncio.wait_for(
+            self._client.aio.models.generate_content(
+                model=self._model,
+                contents=contents,
+                config=config,
+            ),
+            timeout=self._timeout,
         )
         return self._from_gemini_response(response)
 

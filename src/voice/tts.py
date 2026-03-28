@@ -89,6 +89,8 @@ class VoiceClient:
         async with self._playback_lock:
             await self._play_audio(audio)
 
+    _PLAYBACK_TIMEOUT = 30  # max seconds for audio playback
+
     async def _play_audio(self, audio_bytes: bytes) -> None:
         """Write MP3 to a temp file and play via afplay (macOS)."""
         with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
@@ -101,7 +103,13 @@ class VoiceClient:
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
             )
-            await proc.wait()
+            await asyncio.wait_for(proc.wait(), timeout=self._PLAYBACK_TIMEOUT)
+        except asyncio.TimeoutError:
+            logger.warning("Audio playback timed out after %ds, killing", self._PLAYBACK_TIMEOUT)
+            try:
+                proc.kill()
+            except Exception:
+                pass
         except FileNotFoundError:
             logger.warning("afplay not found — cannot play audio (macOS only)")
         finally:

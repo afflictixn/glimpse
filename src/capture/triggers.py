@@ -156,6 +156,7 @@ class CaptureLoop:
         self._last_capture_time = 0.0
         self._last_visual_check = 0.0
         self._capture_count = 0
+        self._processing_task: asyncio.Task | None = None
 
     async def run(self) -> None:
         self._running = True
@@ -164,14 +165,23 @@ class CaptureLoop:
 
         while self._running:
             try:
+                # If busy processing, drain the queue but don't start new captures
+                if self._processing_task is not None and not self._processing_task.done():
+                    try:
+                        self._queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        pass
+                    await asyncio.sleep(poll_s)
+                    continue
+
                 trigger = await self._poll_trigger()
                 if trigger is not None:
                     now = time.monotonic()
                     elapsed_ms = (now - self._last_capture_time) * 1000
                     if elapsed_ms >= self._settings.min_capture_interval_ms:
-                        await self._do_capture(trigger)
-                        self._last_capture_time = now
-                        self._activity.mark_captured()
+                        self._processing_task = asyncio.create_task(
+                            self._do_capture(trigger)
+                        )
 
                 await asyncio.sleep(poll_s)
             except asyncio.CancelledError:
@@ -220,20 +230,32 @@ class CaptureLoop:
         except Exception:
             logger.debug("get_focused_app failed", exc_info=True)
 
-        frame_id = await process_frame(
-            image=image,
-            app_name=app_name or None,
-            window_name=window_name or None,
-            trigger=trigger.value,
-            db=self._db,
-            writer=self._writer,
-            agents=self._agents,
-            providers=self._providers,
-            intelligence=self._intelligence,
-            general_agent=self._general_agent,
-        )
+        try:
+            frame_id = await asyncio.wait_for(
+                process_frame(
+                    image=image,
+                    app_name=app_name or None,
+                    window_name=window_name or None,
+                    trigger=trigger.value,
+                    db=self._db,
+                    writer=self._writer,
+                    agents=self._agents,
+                    providers=self._providers,
+                    intelligence=self._intelligence,
+                    general_agent=self._general_agent,
+                ),
+                timeout=self._settings.capture_timeout_s,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("Frame processing timed out after %ds (trigger=%s)", self._settings.capture_timeout_s, trigger.value)
+            return
+        except Exception:
+            logger.error("Frame processing failed", exc_info=True)
+            return
 
         self._capture_count += 1
+        self._last_capture_time = time.monotonic()
+        self._activity.mark_captured()
         logger.debug(
             "Capture #%d: frame=%d trigger=%s app=%s",
             self._capture_count,
@@ -244,6 +266,12 @@ class CaptureLoop:
 
     async def stop(self) -> None:
         self._running = False
+        if self._processing_task is not None and not self._processing_task.done():
+            self._processing_task.cancel()
+            try:
+                await self._processing_task
+            except (asyncio.CancelledError, Exception):
+                pass
 
     @property
     def capture_count(self) -> int:
