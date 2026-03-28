@@ -22,6 +22,7 @@ from src.intelligence.critique_agent import CritiqueReasoningAgent
 from src.process.browser_content_agent import BrowserContentAgent
 from src.process.gemma_agent import GemmaAgent
 from src.process.process_agent import ProcessAgent
+from src.process.social_context_agent import SocialContextAgent
 from src.context.context_provider import ContextProvider
 from src.intelligence.reasoning_agent import ReasoningAgent
 from src.storage.database import DatabaseManager
@@ -70,6 +71,8 @@ async def run(settings: Settings) -> None:
     db = DatabaseManager(settings)
     await db.initialize()
 
+    tool_registry = ToolRegistry(db)
+
     process_agents: list[ProcessAgent] = [
         GemmaAgent(
             ollama_base_url=settings.ollama_base_url,
@@ -78,6 +81,11 @@ async def run(settings: Settings) -> None:
             timeout_s=settings.ollama_timeout_s,
         ),
         BrowserContentAgent(),
+        SocialContextAgent(
+            tools=tool_registry,
+            ollama_base_url=settings.ollama_base_url,
+            model="gemma3:1b",
+        ),
     ]
     context_providers: list[ContextProvider] = []
 
@@ -96,7 +104,6 @@ async def run(settings: Settings) -> None:
     reasoning_agents: list[ReasoningAgent] = [
         CritiqueReasoningAgent(llm=llm_client),
     ]
-    tool_registry = ToolRegistry(db)
     general_agent = GeneralAgent(
         db=db,
         tools=tool_registry,

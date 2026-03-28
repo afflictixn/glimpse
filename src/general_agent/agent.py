@@ -193,13 +193,20 @@ class GeneralAgent:
             logger.debug("Skipping low-importance item: %s", summary[:80])
             return
 
-        # For high-importance items, use LLM with tools to enrich
-        enrichment = ""
-        if importance >= 0.7:
-            enrichment = await self._enrich(item)
-
-        # Build the notification text
-        notification = self._format_notification(item, summary, enrichment)
+        # Social context events contain raw chat data — let the big model
+        # analyze and decide what (if anything) to notify about.
+        agent_name = item.data.get("agent_name", "")
+        if agent_name == "social_context":
+            notification = await self._analyze_social_context(summary)
+            if not notification:
+                logger.debug("Social context: big model found nothing noteworthy")
+                return
+        else:
+            # For high-importance items, use LLM with tools to enrich
+            enrichment = ""
+            if importance >= 0.7:
+                enrichment = await self._enrich(item)
+            notification = self._format_notification(item, summary, enrichment)
 
         # Push to overlay
         await self._ws_send({
@@ -213,6 +220,37 @@ class GeneralAgent:
 
         self._recent_notifications.append((summary, time.time()))
         logger.info("Surfaced to overlay: %s", notification[:100])
+
+    async def _analyze_social_context(self, raw_context: str) -> str:
+        """Let the big LLM analyze social/chat context and produce a notification."""
+        from datetime import date
+        today = date.today().isoformat()
+
+        system = (
+            "You are Glimpse, an ambient assistant. The user is chatting with someone. "
+            "You have been given their recent chat history and contact info.\n\n"
+            f"Today's date is {today}.\n\n"
+            "Your HIGHEST priority: if ANY birthday, anniversary, or important date is "
+            "mentioned in the conversation (even by the user themselves), calculate how "
+            "soon it is and remind the user. For example: 'Walter's birthday is April 2nd — "
+            "that's in 5 days! Consider getting a gift.'\n\n"
+            "Secondary: action items, unanswered questions, or promises made.\n\n"
+            "Write a SHORT (1-2 sentence) friendly notification. "
+            "If there is truly nothing worth notifying about, respond with exactly: NOTHING"
+        )
+        messages = [
+            Message(role="system", content=system),
+            Message(role="user", content=raw_context),
+        ]
+        try:
+            response = await self._llm.complete(messages)
+            result = response.content.strip()
+            if "NOTHING" in result.upper() or not result:
+                return ""
+            return result
+        except Exception:
+            logger.error("Social context LLM analysis failed", exc_info=True)
+            return ""
 
     def _extract_summary(self, item: PushItem) -> str:
         data = item.data

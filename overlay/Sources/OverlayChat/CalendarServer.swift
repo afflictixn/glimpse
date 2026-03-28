@@ -1,4 +1,5 @@
 import Foundation
+import Contacts
 import EventKit
 import Network
 import SQLite3
@@ -6,14 +7,17 @@ import SQLite3
 /// Local HTTP server (port 9322) that exposes macOS-protected data to the Python backend.
 /// Routes:
 ///   GET /calendar?days=7     — calendar events (requires Calendar permission)
+///   GET /contacts/search?q=John  — search contacts by name, email, or phone (requires Contacts permission)
 ///   GET /imessage/recent?limit=10  — recent iMessage conversations (requires Full Disk Access)
 ///   GET /imessage/search?q=hello&limit=20  — search iMessage history
 ///   GET /imessage/conversation?contact=John&limit=30  — messages with a contact
 final class CalendarServer {
     private let store = EKEventStore()
+    private let contactStore = CNContactStore()
     private var listener: NWListener?
     private let queue = DispatchQueue(label: "overlay-server", qos: .utility)
     private(set) var hasCalendarAccess = false
+    private(set) var hasContactsAccess = false
 
     private let chatDBPath: String = {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
@@ -37,6 +41,7 @@ final class CalendarServer {
 
     func start() {
         requestCalendarAccess()
+        requestContactsAccess()
         startListener()
     }
 
@@ -72,6 +77,21 @@ final class CalendarServer {
                 self?.hasCalendarAccess = granted
                 print("[server] calendar access: granted=\(granted)")
             }
+        }
+    }
+
+    // MARK: - Contacts Permission
+
+    private func requestContactsAccess() {
+        let status = CNContactStore.authorizationStatus(for: .contacts)
+        if status == .authorized {
+            hasContactsAccess = true
+            print("[server] contacts: already authorized")
+            return
+        }
+        contactStore.requestAccess(for: .contacts) { [weak self] granted, error in
+            self?.hasContactsAccess = granted
+            print("[server] contacts access: granted=\(granted)")
         }
     }
 
@@ -112,7 +132,9 @@ final class CalendarServer {
             let raw = String(data: data, encoding: .utf8) ?? ""
             let response: String
 
-            if raw.contains("/imessage/recent") {
+            if raw.contains("/contacts/search") {
+                response = self.handleContactsSearch(raw)
+            } else if raw.contains("/imessage/recent") {
                 response = self.handleIMessageRecent(raw)
             } else if raw.contains("/imessage/search") {
                 response = self.handleIMessageSearch(raw)
@@ -165,6 +187,88 @@ final class CalendarServer {
             if let loc = event.location, !loc.isEmpty { entry["location"] = loc }
             if let notes = event.notes, !notes.isEmpty { entry["notes"] = String(notes.prefix(200)) }
             results.append(entry)
+        }
+
+        return toJSON(results)
+    }
+
+    // MARK: - Contacts Handler
+
+    private func handleContactsSearch(_ raw: String) -> String {
+        let query = parseStringParam(raw, name: "q") ?? ""
+        guard !query.isEmpty else {
+            return "{\"error\": \"Missing required parameter: q\"}"
+        }
+        guard hasContactsAccess else {
+            return "{\"error\": \"Contacts access not granted. Allow in System Settings > Privacy > Contacts.\"}"
+        }
+
+        let keys: [CNKeyDescriptor] = [
+            CNContactGivenNameKey as CNKeyDescriptor,
+            CNContactFamilyNameKey as CNKeyDescriptor,
+            CNContactEmailAddressesKey as CNKeyDescriptor,
+            CNContactPhoneNumbersKey as CNKeyDescriptor,
+            CNContactBirthdayKey as CNKeyDescriptor,
+            CNContactOrganizationNameKey as CNKeyDescriptor,
+            CNContactJobTitleKey as CNKeyDescriptor,
+        ]
+
+        var allContacts: [CNContact] = []
+
+        // Search by name
+        if let predicate = try? CNContact.predicateForContacts(matchingName: query) as NSPredicate {
+            if let contacts = try? contactStore.unifiedContacts(matching: predicate, keysToFetch: keys) {
+                allContacts.append(contentsOf: contacts)
+            }
+        }
+
+        // Search by email if it looks like one
+        if query.contains("@") {
+            let predicate = CNContact.predicateForContacts(matchingEmailAddress: query)
+            if let contacts = try? contactStore.unifiedContacts(matching: predicate, keysToFetch: keys) {
+                allContacts.append(contentsOf: contacts)
+            }
+        }
+
+        // Search by phone if it looks like one
+        let digits = query.filter { $0.isNumber }
+        if digits.count >= 7 {
+            let phoneNumber = CNPhoneNumber(stringValue: query)
+            let predicate = CNContact.predicateForContacts(matching: phoneNumber)
+            if let contacts = try? contactStore.unifiedContacts(matching: predicate, keysToFetch: keys) {
+                allContacts.append(contentsOf: contacts)
+            }
+        }
+
+        // Deduplicate
+        var seen = Set<String>()
+        var results: [[String: Any]] = []
+        for contact in allContacts {
+            if seen.contains(contact.identifier) { continue }
+            seen.insert(contact.identifier)
+
+            var entry: [String: Any] = [
+                "given_name": contact.givenName,
+                "family_name": contact.familyName,
+            ]
+            if !contact.organizationName.isEmpty { entry["organization"] = contact.organizationName }
+            if !contact.jobTitle.isEmpty { entry["job_title"] = contact.jobTitle }
+
+            let emails = contact.emailAddresses.map { $0.value as String }
+            if !emails.isEmpty { entry["emails"] = emails }
+
+            let phones = contact.phoneNumbers.map { $0.value.stringValue }
+            if !phones.isEmpty { entry["phones"] = phones }
+
+            if let bday = contact.birthday {
+                entry["birthday"] = "\(bday.month ?? 0)-\(bday.day ?? 0)"
+            }
+
+            results.append(entry)
+        }
+
+        if results.isEmpty {
+            return "{\"contacts\": [], \"note\": \"No contacts found for query.\"}"
         }
 
         return toJSON(results)

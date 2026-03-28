@@ -429,52 +429,20 @@ class ToolRegistry:
         }, default=str)
 
     async def _contacts_search(self, name: str = "") -> str:
+        """Search contacts via the overlay server (has Contacts permission)."""
+        import httpx
+
         logger.info("contacts_search called: %s", name)
         try:
-            import Contacts as CNContacts
-
-            store = CNContacts.CNContactStore.alloc().init()
-            predicate = CNContacts.CNContact.predicateForContactsMatchingName_(name)
-            keys = [
-                CNContacts.CNContactGivenNameKey,
-                CNContacts.CNContactFamilyNameKey,
-                CNContacts.CNContactEmailAddressesKey,
-                CNContacts.CNContactPhoneNumbersKey,
-                CNContacts.CNContactBirthdayKey,
-                CNContacts.CNContactOrganizationNameKey,
-                CNContacts.CNContactJobTitleKey,
-            ]
-            contacts, error = store.unifiedContactsMatchingPredicate_keysToFetch_error_(
-                predicate, keys, None,
-            )
-            if error:
-                return json.dumps({"error": str(error)})
-
-            results = []
-            for c in (contacts or [])[:10]:
-                entry: dict[str, Any] = {
-                    "given_name": c.givenName(),
-                    "family_name": c.familyName(),
-                    "organization": c.organizationName() or None,
-                    "job_title": c.jobTitle() or None,
-                }
-                emails = c.emailAddresses()
-                if emails:
-                    entry["emails"] = [e.value() for e in emails]
-                phones = c.phoneNumbers()
-                if phones:
-                    entry["phones"] = [p.value().stringValue() for p in phones]
-                bday = c.birthday()
-                if bday:
-                    entry["birthday"] = f"{bday.month()}-{bday.day()}"
-                results.append(entry)
-
-            return json.dumps(results, default=str)
-        except ImportError:
-            return json.dumps({"error": "macOS Contacts framework not available"})
+            async with httpx.AsyncClient(timeout=5) as client:
+                resp = await client.get(
+                    "http://localhost:9322/contacts/search",
+                    params={"q": name},
+                )
+                return resp.text
         except Exception as e:
             logger.error("contacts_search failed: %s", e)
-            return json.dumps({"error": f"Contacts search failed: {e}"})
+            return json.dumps({"error": f"Contacts unavailable. Make sure the Glimpse overlay is running. ({e})"})
 
     async def _calendar_events(self, days_ahead: str = "7") -> str:
         """Fetch calendar events via the overlay's CalendarServer (port 9322)."""
