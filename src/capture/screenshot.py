@@ -46,7 +46,7 @@ def capture_screen(monitor_id: int = 0) -> Image.Image:
     buf = bytes(raw_data[: bytes_per_row * height])
 
     if channels == 4:
-        img = Image.frombytes("RGBA", (width, height), buf, "raw", "RGBA", bytes_per_row)
+        img = Image.frombytes("RGBA", (width, height), buf, "raw", "BGRA", bytes_per_row)
         return img.convert("RGB")
     else:
         return Image.frombytes("RGB", (width, height), buf, "raw", "RGB", bytes_per_row)
