@@ -29,7 +29,9 @@ class Settings:
     max_db_size_mb: int = 10_000
     cleanup_interval_hours: int = 1
 
-    # Ollama / vision agent
+    # Vision process agent
+    vision_provider: str = "gemini"  # "gemini" or "ollama"
+    gemini_vision_model: str = "gemini-3-flash-preview"
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "gemma3:4b"
     include_ocr: bool = False

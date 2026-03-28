@@ -106,6 +106,8 @@ async def process_frame(
                     "frame_id": frame_id,
                     "agent_name": result.agent_name,
                     "app_type": result.app_type,
+                    "app_name": app_name or "",
+                    "window_name": window_name or "",
                     "summary": result.summary,
                     "metadata": result.metadata,
                 })

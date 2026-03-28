@@ -21,6 +21,7 @@ from src.intelligence.intelligence_layer import IntelligenceLayer
 from src.intelligence.critique_agent import CritiqueReasoningAgent
 from src.intelligence.presentation_critique_agent import PresentationCritiqueAgent
 from src.process.browser_content_agent import BrowserContentAgent
+from src.process.gemini_vision_agent import GeminiVisionAgent
 from src.process.gemma_agent import GemmaAgent
 from src.process.process_agent import ProcessAgent
 from src.process.social_context_agent import SocialContextAgent
@@ -44,6 +45,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-db-size-mb", type=int, default=_DEFAULTS.max_db_size_mb, help="Max database size in MB")
     parser.add_argument("--log-level", type=str, default="INFO", help="Logging level")
     parser.add_argument("--debug", action="store_true", help="Enable debug logging for Z Exp internals (suppresses third-party noise)")
+    parser.add_argument("--vision-provider", type=str, default=_DEFAULTS.vision_provider, help="Vision agent provider: gemini or ollama")
+    parser.add_argument("--gemini-vision-model", type=str, default=_DEFAULTS.gemini_vision_model, help="Gemini model for vision processing")
     parser.add_argument("--ollama-model", type=str, default=_DEFAULTS.ollama_model, help="Ollama model name")
     parser.add_argument("--ollama-url", type=str, default=_DEFAULTS.ollama_base_url, help="Ollama server base URL")
     parser.add_argument("--include-ocr", action="store_true", help="Include OCR text in Gemma agent prompt")
@@ -77,14 +80,23 @@ async def run(settings: Settings) -> None:
 
     tool_registry = ToolRegistry(db)
 
-    process_agents: list[ProcessAgent] = [
-        GemmaAgent(
+    if settings.vision_provider == "gemini":
+        vision_agent: ProcessAgent = GeminiVisionAgent(
+            model=settings.gemini_vision_model,
+            include_ocr=settings.include_ocr,
+            max_image_width=settings.ollama_max_image_width,
+        )
+    else:
+        vision_agent = GemmaAgent(
             ollama_base_url=settings.ollama_base_url,
             model=settings.ollama_model,
             include_ocr=settings.include_ocr,
             timeout_s=settings.ollama_timeout_s,
             max_image_width=settings.ollama_max_image_width,
-        ),
+        )
+
+    process_agents: list[ProcessAgent] = [
+        vision_agent,
         BrowserContentAgent(),
         SocialContextAgent(
             tools=tool_registry,
@@ -237,6 +249,8 @@ def main() -> None:
         jpeg_quality=args.jpeg_quality,
         max_retention_days=args.retention_days,
         max_db_size_mb=args.max_db_size_mb,
+        vision_provider=args.vision_provider,
+        gemini_vision_model=args.gemini_vision_model,
         ollama_base_url=args.ollama_url,
         ollama_model=args.ollama_model,
         include_ocr=args.include_ocr,

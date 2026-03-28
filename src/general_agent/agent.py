@@ -193,6 +193,10 @@ class GeneralAgent:
             logger.debug("LLM found nothing noteworthy for %s event", agent_name or "unknown")
             return
 
+        if self._filter.is_duplicate_notification(notification):
+            logger.debug("Filter: duplicate notification — %s", notification[:80])
+            return
+
         await self._ws_send({
             "type": "show_proposal",
             "text": notification,
@@ -202,7 +206,7 @@ class GeneralAgent:
         if self._voice and self._voice_enabled and importance >= 0.7:
             asyncio.create_task(self._voice.speak(notification))
 
-        self._filter.record_notification(summary)
+        self._filter.record_notification(notification)
         logger.info("Surfaced to overlay: %s", notification[:100])
 
     async def _analyze_screen_context(self, item: PushItem, summary: str) -> str:

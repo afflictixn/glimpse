@@ -18,11 +18,12 @@ logger = logging.getLogger(__name__)
 
 SIMILARITY_THRESHOLD = 0.85
 SUMMARY_WINDOW_S = 60.0
-NOTIFICATION_WINDOW_S = 30.0
+NOTIFICATION_WINDOW_S = 120.0
 IMPORTANCE_THRESHOLD = 0.5
 
 _CONTEXT_COOLDOWNS: dict[str, float] = {
-    "gemma3": 20.0,
+    "gemma3": 60.0,
+    "gemini_vision": 60.0,
     "social_context": 20.0,
 }
 _DEFAULT_CONTEXT_COOLDOWN = 30.0
@@ -66,9 +67,21 @@ class EventFilter:
         self._record_context(item)
         return True, importance
 
-    def record_notification(self, summary: str) -> None:
-        """Track a surfaced notification for exact-match dedup."""
-        self._recent_notifications.append((summary, time.time()))
+    def is_duplicate_notification(self, notification: str) -> bool:
+        """Check if a notification is too similar to one recently surfaced."""
+        now = time.time()
+        normalized = notification.strip().lower()
+        for prev, ts in self._recent_notifications:
+            if now - ts > NOTIFICATION_WINDOW_S:
+                continue
+            ratio = SequenceMatcher(None, normalized, prev).ratio()
+            if ratio >= SIMILARITY_THRESHOLD:
+                return True
+        return False
+
+    def record_notification(self, notification: str) -> None:
+        """Track a surfaced notification for fuzzy dedup."""
+        self._recent_notifications.append((notification.strip().lower(), time.time()))
 
     # ── Fuzzy dedup ───────────────────────────────────────────
 
@@ -80,11 +93,6 @@ class EventFilter:
                 continue
             ratio = SequenceMatcher(None, normalized, prev).ratio()
             if ratio >= SIMILARITY_THRESHOLD:
-                return True
-        for prev, ts in self._recent_notifications:
-            if now - ts > NOTIFICATION_WINDOW_S:
-                continue
-            if prev.strip().lower() == normalized:
                 return True
         return False
 
@@ -143,7 +151,7 @@ class EventFilter:
             contacts = data.get("metadata", {}).get("contacts", [])
             score += 0.4 if contacts else 0.0
 
-        if agent.startswith("gemma"):
+        if agent.startswith("gemma") or agent == "gemini_vision":
             score += 0.1
 
         summary = data.get("summary", "") or data.get("action_description", "")
