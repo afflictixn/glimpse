@@ -20,8 +20,8 @@ struct FloatingOverlayView: View {
             compactInput
         }
         .frame(width: Self.responsiveWidth)
-        .background(Color.black.opacity(0.5))
-        .background(VisualEffectBackground(material: .hudWindow, blurRadius: 5, cornerRadius: 14))
+        .background(Color.black.opacity(0.3))
+        .background(VisualEffectBackground(material: .popover, blurRadius: 5, cornerRadius: 14))
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)

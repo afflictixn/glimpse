@@ -16,8 +16,8 @@ struct SettingsView: View {
                 .padding(16)
             }
         }
-        .background(Color.black.opacity(0.5))
-        .background(VisualEffectBackground(material: .hudWindow, blurRadius: 5))
+        .background(Color.black.opacity(0.3))
+        .background(VisualEffectBackground(material: .popover, blurRadius: 5))
     }
 
     // MARK: - Header

@@ -25,8 +25,8 @@ struct ChatView: View {
                 inputBar
             }
         }
-        .background(Color.black.opacity(0.5))
-        .background(VisualEffectBackground(material: .hudWindow, blurRadius: 5))
+        .background(Color.black.opacity(0.3))
+        .background(VisualEffectBackground(material: .popover, blurRadius: 5))
         .preferredColorScheme(.dark)
     }
 
@@ -206,7 +206,7 @@ struct ChatView: View {
                             .foregroundColor(
                                 viewModel.inputText.trimmingCharacters(in: .whitespaces).isEmpty
                                     ? .white.opacity(0.2)
-                                    : .blue
+                                    : .white
                             )
                     }
                     .buttonStyle(.plain)
