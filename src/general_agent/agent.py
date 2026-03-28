@@ -193,20 +193,15 @@ class GeneralAgent:
             logger.debug("Skipping low-importance item: %s", summary[:80])
             return
 
-        # Social context events contain raw chat data — let the big model
-        # analyze and decide what (if anything) to notify about.
         agent_name = item.data.get("agent_name", "")
         if agent_name == "social_context":
             notification = await self._analyze_social_context(summary)
-            if not notification:
-                logger.debug("Social context: big model found nothing noteworthy")
-                return
         else:
-            # For high-importance items, use LLM with tools to enrich
-            enrichment = ""
-            if importance >= 0.7:
-                enrichment = await self._enrich(item)
-            notification = self._format_notification(item, summary, enrichment)
+            notification = await self._analyze_screen_context(item, summary)
+
+        if not notification:
+            logger.debug("LLM found nothing noteworthy for %s event", agent_name or "unknown")
+            return
 
         # Push to overlay
         await self._ws_send({
@@ -220,6 +215,66 @@ class GeneralAgent:
 
         self._recent_notifications.append((summary, time.time()))
         logger.info("Surfaced to overlay: %s", notification[:100])
+
+    async def _analyze_screen_context(self, item: PushItem, summary: str) -> str:
+        """Let the LLM decide if the screen context is worth a proactive notification."""
+        from datetime import date
+        today = date.today().isoformat()
+
+        enrichment = await self._enrich(item)
+
+        metadata = item.data.get("metadata", {})
+        app_name = item.data.get("app_name", "")
+        app_type = item.data.get("app_type", "")
+
+        context_parts = [f"Screen activity: {summary}"]
+        if app_name:
+            context_parts.append(f"App: {app_name}")
+        if app_type:
+            context_parts.append(f"Type: {app_type}")
+        if metadata:
+            context_parts.append(f"Details: {json.dumps(metadata, default=str)[:500]}")
+        if enrichment:
+            context_parts.append(f"Related history: {enrichment}")
+
+        context_block = "\n".join(context_parts)
+
+        system = (
+            "You are Glimpse, an ambient assistant watching the user's screen. "
+            f"Today is {today}.\n\n"
+            "You just received a screen activity update. Your job is to decide "
+            "whether there is something genuinely USEFUL to tell the user — "
+            "an insight, a tip, a warning, a deal, a reminder, or context they "
+            "might not have.\n\n"
+            "Rules:\n"
+            "- Do NOT describe what the user is looking at — they already know.\n"
+            "- Do NOT say 'I see you are viewing…' or 'You are currently on…'.\n"
+            "- Only speak up if you have something actionable or genuinely helpful.\n"
+            "- If you have nothing useful to add, respond with exactly: NOTHING\n"
+            "- Keep responses to 1-2 sentences, friendly and concise.\n\n"
+            "Good examples:\n"
+            '- "That product was $20 cheaper on Amazon last week."\n'
+            '- "You have a meeting about this project in 2 hours."\n'
+            '- "This article\'s author also wrote a follow-up piece you might like."\n\n'
+            "Bad examples (NEVER do these):\n"
+            '- "You are viewing a product page on Amazon."\n'
+            '- "I see you\'re browsing Reddit."\n'
+            '- "You are currently reading an article about AI."'
+        )
+
+        messages = [
+            Message(role="system", content=system),
+            Message(role="user", content=context_block),
+        ]
+        try:
+            response = await self._llm.complete(messages)
+            result = response.content.strip()
+            if "NOTHING" in result.upper() or not result:
+                return ""
+            return result
+        except Exception:
+            logger.error("Screen context LLM analysis failed", exc_info=True)
+            return ""
 
     async def _analyze_social_context(self, raw_context: str) -> str:
         """Let the big LLM analyze social/chat context and produce a notification."""
@@ -310,12 +365,6 @@ class GeneralAgent:
             logger.debug("Enrichment failed", exc_info=True)
 
         return ""
-
-    def _format_notification(self, item: PushItem, summary: str, enrichment: str) -> str:
-        parts = [summary]
-        if enrichment:
-            parts.append(f"\n\n{enrichment}")
-        return "\n".join(parts)
 
     # ── Conversation / response generation ─────────────────────
 
