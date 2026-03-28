@@ -1,4 +1,4 @@
-"""Tests for PresentationCritiqueAgent — Ollama and DB are mocked."""
+"""Tests for PresentationCritiqueAgent — Gemini and DB are mocked."""
 from __future__ import annotations
 
 import json
@@ -88,7 +88,7 @@ class TestCritique:
             "Title text is too small for readability at distance.",
             "Low contrast between grey text and white background.",
         ]
-        ollama_response = json.dumps({
+        gemini_response = json.dumps({
             "critique": critique_points,
             "verdict": "needs_work",
         })
@@ -96,8 +96,8 @@ class TestCritique:
         with (
             patch.object(agent, "_get_snapshot_path", return_value="/tmp/snap.jpg"),
             patch("src.intelligence.presentation_critique_agent.Image") as mock_pil,
-            patch.object(agent, "_encode_image", return_value="base64data"),
-            patch.object(agent, "_call_ollama", return_value=ollama_response),
+            patch.object(agent, "_encode_image", return_value=b"jpegdata"),
+            patch.object(agent, "_call_gemini", return_value=gemini_response),
         ):
             mock_pil.open.return_value = _dummy_image()
             result = await agent.reason(_presentation_event(), _mock_db())
@@ -113,13 +113,13 @@ class TestCritique:
     @pytest.mark.asyncio
     async def test_clean_verdict_returns_none(self):
         agent = PresentationCritiqueAgent()
-        ollama_response = json.dumps({"critique": [], "verdict": "clean"})
+        gemini_response = json.dumps({"critique": [], "verdict": "clean"})
 
         with (
             patch.object(agent, "_get_snapshot_path", return_value="/tmp/snap.jpg"),
             patch("src.intelligence.presentation_critique_agent.Image") as mock_pil,
-            patch.object(agent, "_encode_image", return_value="base64data"),
-            patch.object(agent, "_call_ollama", return_value=ollama_response),
+            patch.object(agent, "_encode_image", return_value=b"jpegdata"),
+            patch.object(agent, "_call_gemini", return_value=gemini_response),
         ):
             mock_pil.open.return_value = _dummy_image()
             result = await agent.reason(_presentation_event(), _mock_db())
@@ -129,7 +129,7 @@ class TestCritique:
     @pytest.mark.asyncio
     async def test_critique_truncated_to_three_points(self):
         agent = PresentationCritiqueAgent()
-        ollama_response = json.dumps({
+        gemini_response = json.dumps({
             "critique": ["Point 1", "Point 2", "Point 3", "Point 4", "Point 5"],
             "verdict": "needs_work",
         })
@@ -137,8 +137,8 @@ class TestCritique:
         with (
             patch.object(agent, "_get_snapshot_path", return_value="/tmp/snap.jpg"),
             patch("src.intelligence.presentation_critique_agent.Image") as mock_pil,
-            patch.object(agent, "_encode_image", return_value="base64data"),
-            patch.object(agent, "_call_ollama", return_value=ollama_response),
+            patch.object(agent, "_encode_image", return_value=b"jpegdata"),
+            patch.object(agent, "_call_gemini", return_value=gemini_response),
         ):
             mock_pil.open.return_value = _dummy_image()
             result = await agent.reason(_presentation_event(), _mock_db())
@@ -149,7 +149,7 @@ class TestCritique:
     @pytest.mark.asyncio
     async def test_action_description_joins_points(self):
         agent = PresentationCritiqueAgent()
-        ollama_response = json.dumps({
+        gemini_response = json.dumps({
             "critique": ["Bad font", "Low contrast"],
             "verdict": "needs_work",
         })
@@ -157,8 +157,8 @@ class TestCritique:
         with (
             patch.object(agent, "_get_snapshot_path", return_value="/tmp/snap.jpg"),
             patch("src.intelligence.presentation_critique_agent.Image") as mock_pil,
-            patch.object(agent, "_encode_image", return_value="base64data"),
-            patch.object(agent, "_call_ollama", return_value=ollama_response),
+            patch.object(agent, "_encode_image", return_value=b"jpegdata"),
+            patch.object(agent, "_call_gemini", return_value=gemini_response),
         ):
             mock_pil.open.return_value = _dummy_image()
             result = await agent.reason(_presentation_event(), _mock_db())
@@ -166,18 +166,18 @@ class TestCritique:
         assert result.action_description == "Bad font | Low contrast"
 
 
-# ── Ollama failure ──
+# ── Gemini failure ──
 
-class TestOllamaFailure:
+class TestGeminiFailure:
     @pytest.mark.asyncio
-    async def test_ollama_error_returns_none(self):
+    async def test_gemini_error_returns_none(self):
         agent = PresentationCritiqueAgent()
 
         with (
             patch.object(agent, "_get_snapshot_path", return_value="/tmp/snap.jpg"),
             patch("src.intelligence.presentation_critique_agent.Image") as mock_pil,
-            patch.object(agent, "_encode_image", return_value="base64data"),
-            patch.object(agent, "_call_ollama", side_effect=Exception("Connection refused")),
+            patch.object(agent, "_encode_image", return_value=b"jpegdata"),
+            patch.object(agent, "_call_gemini", side_effect=Exception("API error")),
         ):
             mock_pil.open.return_value = _dummy_image()
             result = await agent.reason(_presentation_event(), _mock_db())
@@ -191,8 +191,8 @@ class TestOllamaFailure:
         with (
             patch.object(agent, "_get_snapshot_path", return_value="/tmp/snap.jpg"),
             patch("src.intelligence.presentation_critique_agent.Image") as mock_pil,
-            patch.object(agent, "_encode_image", return_value="base64data"),
-            patch.object(agent, "_call_ollama", return_value="not valid json"),
+            patch.object(agent, "_encode_image", return_value=b"jpegdata"),
+            patch.object(agent, "_call_gemini", return_value="not valid json"),
         ):
             mock_pil.open.return_value = _dummy_image()
             result = await agent.reason(_presentation_event(), _mock_db())
@@ -208,8 +208,8 @@ class TestOllamaFailure:
         with (
             patch.object(agent, "_get_snapshot_path", return_value="/tmp/snap.jpg"),
             patch("src.intelligence.presentation_critique_agent.Image") as mock_pil,
-            patch.object(agent, "_encode_image", return_value="base64data"),
-            patch.object(agent, "_call_ollama", return_value=fenced),
+            patch.object(agent, "_encode_image", return_value=b"jpegdata"),
+            patch.object(agent, "_call_gemini", return_value=fenced),
         ):
             mock_pil.open.return_value = _dummy_image()
             result = await agent.reason(_presentation_event(), _mock_db())
@@ -239,7 +239,7 @@ class TestAgentProperties:
         assert agent.name == "presentation_critique"
 
     def test_custom_model(self):
-        agent = PresentationCritiqueAgent(model="llava:7b")
+        agent = PresentationCritiqueAgent(model="gemini-2.5-flash-preview-04-17")
         assert agent.name == "presentation_critique"
 
 

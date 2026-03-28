@@ -108,12 +108,7 @@ async def run(settings: Settings) -> None:
 
     reasoning_agents: list[ReasoningAgent] = [
         CritiqueReasoningAgent(llm=llm_client),
-        PresentationCritiqueAgent(
-            ollama_base_url=settings.ollama_base_url,
-            model=settings.ollama_model,
-            timeout_s=settings.ollama_timeout_s,
-            max_image_width=settings.ollama_max_image_width,
-        ),
+        PresentationCritiqueAgent(model=settings.llm_model),
     ]
     general_agent = GeneralAgent(
         db=db,

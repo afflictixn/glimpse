@@ -1,15 +1,14 @@
-"""PresentationCritiqueAgent — visual design critique for presentations via Ollama vision."""
+"""PresentationCritiqueAgent — visual design critique for presentations via Gemini vision."""
 from __future__ import annotations
 
 import asyncio
-import base64
 import io
 import json
 import logging
-import urllib.error
-import urllib.request
 from pathlib import Path
 
+from google import genai
+from google.genai import types as gtypes
 from PIL import Image
 
 from src.intelligence.reasoning_agent import ReasoningAgent
@@ -20,16 +19,17 @@ logger = logging.getLogger(__name__)
 
 _SYSTEM_PROMPT = """\
 You are a presentation design critic. Given a screenshot of a slide, provide \
-brief, actionable feedback on visual design only. Focus on:
-- Font choices and readability (size, weight, consistency)
-- Color palette (contrast, harmony, accessibility)
-- Overall layout and visual hierarchy
+brief, actionable feedback on visual design only. Focus exclusively on:
+- Font: typeface choice, size, weight, consistency across the slide
+- Color: palette harmony, contrast ratios, accessibility
+- Style: layout balance, visual hierarchy, spacing, alignment
 
 Rules:
 - Maximum 3 bullet points total
-- Each bullet must be one sentence
+- Each bullet must be one short sentence
 - Only flag real problems; if the slide looks fine, say so
-- Be direct and specific, not generic
+- Be specific (e.g. "body text is ~10pt, too small for projection") not generic
+- Do NOT comment on content, grammar, or messaging — only visuals
 
 Respond ONLY with a JSON object:
 {"critique": ["point 1", "point 2"], "verdict": "clean|needs_work"}
@@ -39,20 +39,18 @@ If the design is solid, respond with:
 
 
 class PresentationCritiqueAgent(ReasoningAgent):
-    """Critiques presentation slide design using Ollama vision model."""
+    """Critiques presentation slide design using Gemini vision API."""
 
     def __init__(
         self,
         *,
-        ollama_base_url: str = "http://localhost:11434",
-        model: str = "gemma3:4b",
-        timeout_s: int = 30,
-        max_image_width: int = 960,
+        model: str = "gemini-2.0-flash",
+        max_image_width: int = 1280,
+        api_key: str | None = None,
     ) -> None:
-        self._base_url = ollama_base_url.rstrip("/")
         self._model = model
-        self._timeout_s = timeout_s
         self._max_width = max_image_width
+        self._client = genai.Client(api_key=api_key)
 
     @property
     def name(self) -> str:
@@ -77,12 +75,12 @@ class PresentationCritiqueAgent(ReasoningAgent):
             logger.error("Failed to load snapshot %s", snapshot_path, exc_info=True)
             return None
 
-        image_b64 = await asyncio.to_thread(self._encode_image, image)
+        image_bytes = await asyncio.to_thread(self._encode_image, image)
 
         try:
-            raw = await asyncio.to_thread(self._call_ollama, image_b64)
+            raw = await self._call_gemini(image_bytes)
         except Exception:
-            logger.error("Ollama critique request failed", exc_info=True)
+            logger.error("Gemini critique request failed", exc_info=True)
             return None
 
         return self._parse_response(raw, event)
@@ -100,7 +98,7 @@ class PresentationCritiqueAgent(ReasoningAgent):
             return path
         return None
 
-    def _encode_image(self, image: Image.Image) -> str:
+    def _encode_image(self, image: Image.Image) -> bytes:
         rgb = image.convert("RGB") if image.mode != "RGB" else image
         if self._max_width and rgb.width > self._max_width:
             ratio = self._max_width / rgb.width
@@ -109,44 +107,30 @@ class PresentationCritiqueAgent(ReasoningAgent):
                 Image.Resampling.LANCZOS,
             )
         buf = io.BytesIO()
-        rgb.save(buf, format="JPEG", quality=70)
-        return base64.b64encode(buf.getvalue()).decode()
+        rgb.save(buf, format="JPEG", quality=80)
+        return buf.getvalue()
 
-    def _call_ollama(self, image_b64: str) -> str:
-        payload = json.dumps({
-            "model": self._model,
-            "prompt": "Critique this presentation slide's visual design.",
-            "system": _SYSTEM_PROMPT,
-            "images": [image_b64],
-            "stream": False,
-            "format": {
-                "type": "object",
-                "properties": {
-                    "critique": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                    },
-                    "verdict": {
-                        "type": "string",
-                        "enum": ["clean", "needs_work"],
-                    },
-                },
-                "required": ["critique", "verdict"],
-            },
-            "options": {"temperature": 0.2},
-        }).encode()
-
-        req = urllib.request.Request(
-            f"{self._base_url}/api/generate",
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
+    async def _call_gemini(self, image_bytes: bytes) -> str:
+        image_part = gtypes.Part(
+            inline_data=gtypes.Blob(mime_type="image/jpeg", data=image_bytes),
+        )
+        text_part = gtypes.Part(
+            text="Critique this presentation slide's visual design: font, font size, color, and style only.",
         )
 
-        with urllib.request.urlopen(req, timeout=self._timeout_s) as resp:
-            data = json.loads(resp.read())
+        config = gtypes.GenerateContentConfig(
+            system_instruction=_SYSTEM_PROMPT,
+            temperature=0.2,
+            response_mime_type="application/json",
+        )
 
-        return data.get("response", "")
+        response = await self._client.aio.models.generate_content(
+            model=self._model,
+            contents=[gtypes.Content(role="user", parts=[image_part, text_part])],
+            config=config,
+        )
+
+        return response.text or ""
 
     def _parse_response(self, text: str, event: Event) -> Action | None:
         cleaned = text.strip()
