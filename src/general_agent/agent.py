@@ -82,6 +82,7 @@ class GeneralAgent:
         self._llm = llm
         self._overlay_ws_url = overlay_ws_url
         self._voice = voice
+        self._voice_enabled = voice is not None  # mirrors overlay setting
 
         # Processing queue — events and actions arrive here via /push
         self._queue: asyncio.Queue[PushItem] = asyncio.Queue()
@@ -126,7 +127,7 @@ class GeneralAgent:
         })
 
         # Speak the response aloud
-        if self._voice:
+        if self._voice and self._voice_enabled:
             asyncio.create_task(self._voice.speak(response))
 
 
@@ -141,6 +142,7 @@ class GeneralAgent:
             "conversation_turns": len(self._conversation),
             "ws_connected": self._ws_connection is not None,
             "tts_enabled": self._voice is not None,
+            "voice_enabled": self._voice_enabled,
         }
 
     # ── Main loop ──────────────────────────────────────────────
@@ -215,7 +217,7 @@ class GeneralAgent:
         })
 
         # Speak high-importance notifications aloud
-        if self._voice and importance >= 0.7:
+        if self._voice and self._voice_enabled and importance >= 0.7:
             asyncio.create_task(self._voice.speak(notification))
 
         self._recent_notifications.append((summary, time.time()))

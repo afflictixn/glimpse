@@ -33,6 +33,10 @@ class SpeakRequest(BaseModel):
     text: str
 
 
+class VoiceToggleRequest(BaseModel):
+    enabled: bool
+
+
 @router.post("/push", status_code=202)
 async def push(req: PushRequest, request: Request) -> dict:
     """Receive an event or action push. Returns 202 immediately."""
@@ -65,6 +69,15 @@ async def speak(req: SpeakRequest, request: Request) -> dict:
         )
     await agent._voice.speak(req.text)
     return {"status": "spoken", "text": req.text}
+
+
+@router.post("/voice")
+async def voice_toggle(req: VoiceToggleRequest, request: Request) -> dict:
+    """Toggle backend TTS on/off (called by overlay when user changes setting)."""
+    agent = request.app.state.general_agent
+    agent._voice_enabled = req.enabled
+    logger.info("Voice toggled: %s", req.enabled)
+    return {"voice_enabled": req.enabled}
 
 
 @router.get("/status")
