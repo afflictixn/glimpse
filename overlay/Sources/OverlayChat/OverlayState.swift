@@ -89,11 +89,7 @@ final class OverlayState: ObservableObject {
     func handleProposal(text: String) {
         currentSuggestion = text
         modeChangedAt = Date().timeIntervalSinceReferenceDate
-        switch importance {
-        case .low:    mode = .suggestion
-        case .medium: mode = .suggestion
-        case .high:   mode = .important
-        }
+        mode = .suggestion
         // Voice is handled server-side by GeneralAgent — no overlay-side speak
     }
 
