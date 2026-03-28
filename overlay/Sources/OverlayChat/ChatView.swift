@@ -42,6 +42,14 @@ struct ChatView: View {
             }
             .buttonStyle(.plain)
             .help("Clear chat")
+
+            Button(action: { NSApp.keyWindow?.orderOut(nil) }) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 12))
+                    .foregroundColor(.white.opacity(0.6))
+            }
+            .buttonStyle(.plain)
+            .help("Close (Cmd+Shift+O to reopen)")
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
