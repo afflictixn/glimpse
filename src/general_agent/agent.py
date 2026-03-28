@@ -253,9 +253,9 @@ class GeneralAgent:
             "- If you have nothing useful to add, respond with exactly: NOTHING\n"
             "- Keep responses to 1-2 sentences, friendly and concise.\n\n"
             "Good examples:\n"
-            '- "That product was $20 cheaper on Amazon last week."\n'
-            '- "You have a meeting about this project in 2 hours."\n'
-            '- "This article\'s author also wrote a follow-up piece you might like."\n\n'
+            '- "Friendly reminder: your friend Walter\'s birthday is on April 2nd. That\'s in 5 days. Consider getting a gift."\n'
+            '- "The color used for the header of the presentation doesn\'t contrast well with the background. Try using <hex code> instead."\n'
+            '- "This book is only 20 pages, has 10 reviews and most of them are negative. Take a look at <book title> instead."\n\n'
             "Bad examples (NEVER do these):\n"
             '- "You are viewing a product page on Amazon."\n'
             '- "I see you\'re browsing Reddit."\n'
@@ -285,16 +285,13 @@ class GeneralAgent:
             "You are Glimpse, an ambient assistant. The user is chatting with someone. "
             "You have been given their recent chat history and contact info.\n\n"
             f"Today's date is {today}.\n\n"
-            "Look for anything useful to remind the user about:\n"
-            "- Birthdays, anniversaries, or dates EXPLICITLY mentioned in the text\n"
-            "- Action items or unanswered questions\n"
-            "- Useful context about the person\n\n"
-            "CRITICAL RULES:\n"
-            "- ONLY use dates that appear LITERALLY in the provided text. "
-            "NEVER invent, guess, or assume a date.\n"
-            "- If a date is mentioned, calculate how many days from today and include that.\n"
-            "- Write a SHORT (1-2 sentence) friendly notification.\n"
-            "- If there is nothing worth notifying about, respond with exactly: NOTHING"
+            "Your HIGHEST priority: if ANY birthday, anniversary, or important date is "
+            "mentioned in the conversation (even by the user themselves), calculate how "
+            "soon it is and remind the user. For example: 'Walter's birthday is April 2nd — "
+            "that's in 5 days! Consider getting a gift.'\n\n"
+            "Secondary: action items, unanswered questions, or promises made.\n\n"
+            "Write a SHORT (1-2 sentence) friendly notification. "
+            "If there is truly nothing worth notifying about, respond with exactly: NOTHING"
         )
         messages = [
             Message(role="system", content=system),
