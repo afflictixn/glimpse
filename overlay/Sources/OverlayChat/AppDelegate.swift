@@ -1,37 +1,115 @@
 import AppKit
 import SwiftUI
-import Carbon.HIToolbox
+import Combine
 
-/// Custom NSPanel subclass that can become key window even when borderless,
-/// allowing text fields inside to receive keyboard input.
+/// NSPanel that can become key (for text input in chat)
 final class KeyablePanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private var panel: KeyablePanel!
+    private var edgeGlowWindow: NSPanel!
+    private var suggestionWindow: NSPanel!
+    private var chatPanel: KeyablePanel!
     private var statusItem: NSStatusItem!
-    private var viewModel: ChatViewModel!
+
+    private var overlayState: OverlayState!
+    private var chatViewModel: ChatViewModel!
     private var wsServer: WebSocketServer!
+
+    private var cancellables = Set<AnyCancellable>()
 
     // MARK: - Lifecycle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
-        viewModel = ChatViewModel()
-        setupPanel()
+
+        overlayState = OverlayState()
+        chatViewModel = ChatViewModel()
+
+        setupEdgeGlowWindow()
+        setupSuggestionWindow()
+        setupChatPanel()
         setupStatusBar()
         setupGlobalHotkey()
         setupWebSocket()
+        bindState()
+
+        // Startup demo
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            self?.overlayState.handleProposal(text: "glimpse is alive", importance: .medium)
+        }
     }
 
-    // MARK: - Floating Panel
+    // MARK: - Edge Glow Window (always visible, click-through)
 
-    private func setupPanel() {
+    private func setupEdgeGlowWindow() {
+        guard let screen = NSScreen.main else { return }
+
+        edgeGlowWindow = NSPanel(
+            contentRect: screen.frame,
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+
+        edgeGlowWindow.level = .floating
+        edgeGlowWindow.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
+        edgeGlowWindow.isOpaque = false
+        edgeGlowWindow.backgroundColor = .clear
+        edgeGlowWindow.hasShadow = false
+        edgeGlowWindow.ignoresMouseEvents = true
+        edgeGlowWindow.hidesOnDeactivate = false
+        edgeGlowWindow.animationBehavior = .none
+
+        let glowView = EdgeGlowView(state: overlayState)
+        let hostingView = NSHostingView(rootView: glowView)
+        edgeGlowWindow.contentView = hostingView
+        edgeGlowWindow.orderFrontRegardless()
+    }
+
+    // MARK: - Suggestion Window (small, interactive, shows one-liner text)
+
+    private func setupSuggestionWindow() {
         guard let screen = NSScreen.main else { return }
         let visibleFrame = screen.visibleFrame
-        let panelWidth = visibleFrame.width * 0.30
+
+        // Positioned center-right
+        let width: CGFloat = 320
+        let height: CGFloat = 80
+        let origin = CGPoint(
+            x: visibleFrame.maxX - width - 60,
+            y: visibleFrame.midY - height / 2
+        )
+
+        suggestionWindow = NSPanel(
+            contentRect: NSRect(origin: origin, size: CGSize(width: width, height: height)),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+
+        suggestionWindow.level = .floating
+        suggestionWindow.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
+        suggestionWindow.isOpaque = false
+        suggestionWindow.backgroundColor = .clear
+        suggestionWindow.hasShadow = false
+        suggestionWindow.hidesOnDeactivate = false
+        suggestionWindow.animationBehavior = .none
+
+        let suggestionView = SuggestionView(state: overlayState)
+        let hostingView = NSHostingView(rootView: suggestionView)
+        suggestionWindow.contentView = hostingView
+        suggestionWindow.orderFrontRegardless()
+    }
+
+    // MARK: - Chat Panel (hidden by default)
+
+    private func setupChatPanel() {
+        guard let screen = NSScreen.main else { return }
+        let visibleFrame = screen.visibleFrame
+        let panelWidth = visibleFrame.width * 0.28
         let panelHeight = visibleFrame.height
 
         let origin = CGPoint(
@@ -41,32 +119,86 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let frame = NSRect(origin: origin, size: CGSize(width: panelWidth, height: panelHeight))
 
-        panel = KeyablePanel(
+        chatPanel = KeyablePanel(
             contentRect: frame,
             styleMask: [.borderless, .nonactivatingPanel, .resizable],
             backing: .buffered,
             defer: false
         )
 
-        panel.level = .floating
-        panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
+        chatPanel.level = .floating
+        chatPanel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
+        chatPanel.isOpaque = false
+        chatPanel.backgroundColor = .clear
+        chatPanel.hasShadow = true
+        chatPanel.isMovableByWindowBackground = true
+        chatPanel.becomesKeyOnlyIfNeeded = true
+        chatPanel.hidesOnDeactivate = false
+        chatPanel.animationBehavior = .utilityWindow
 
-        panel.isOpaque = false
-        panel.backgroundColor = .clear
-        panel.hasShadow = true
-        panel.isMovableByWindowBackground = true
-        panel.becomesKeyOnlyIfNeeded = true
-        panel.hidesOnDeactivate = false
-        panel.animationBehavior = .utilityWindow
-
-        let chatView = ChatView(viewModel: viewModel)
+        let chatView = ChatView(viewModel: chatViewModel)
         let hostingView = NSHostingView(rootView: chatView)
         hostingView.wantsLayer = true
         hostingView.layer?.cornerRadius = 12
         hostingView.layer?.masksToBounds = true
-        panel.contentView = hostingView
+        chatPanel.contentView = hostingView
 
-        panel.orderFrontRegardless()
+        // Hidden by default — edges only
+        chatPanel.orderOut(nil)
+    }
+
+    // MARK: - State Binding
+
+    private func bindState() {
+        overlayState.$showChatPanel
+            .removeDuplicates()
+            .sink { [weak self] show in
+                guard let self else { return }
+                if show {
+                    self.chatPanel.alphaValue = 0
+                    self.chatPanel.orderFrontRegardless()
+                    NSAnimationContext.runAnimationGroup { ctx in
+                        ctx.duration = 0.25
+                        ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                        self.chatPanel.animator().alphaValue = 1
+                    }
+                } else {
+                    NSAnimationContext.runAnimationGroup({ ctx in
+                        ctx.duration = 0.2
+                        ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
+                        self.chatPanel.animator().alphaValue = 0
+                    }, completionHandler: {
+                        self.chatPanel.orderOut(nil)
+                    })
+                }
+            }
+            .store(in: &cancellables)
+    }
+
+    // MARK: - WebSocket Server (receives from Python backend)
+
+    private func setupWebSocket() {
+        wsServer = WebSocketServer(port: 9321)
+        wsServer.onMessage = { [weak self] message in
+            Task { @MainActor in
+                guard let self else { return }
+                // Feed to chat view model (existing behavior)
+                self.chatViewModel.handleInboundMessage(message)
+
+                // Also feed to overlay state for edge glow + voice
+                switch message {
+                case .showProposal(let text, _):
+                    self.overlayState.handleProposal(text: text, importance: .medium)
+                case .showConversation, .appendConversation:
+                    break // these go straight to chat
+                case .hide:
+                    self.overlayState.dismissSuggestion()
+                case .setAssistantLabel:
+                    break
+                }
+            }
+        }
+        wsServer.start()
     }
 
     // MARK: - Status Bar
@@ -75,11 +207,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
 
         if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: "eye.fill", accessibilityDescription: "Glimpse")
+            button.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: "glimpse")
         }
 
         let menu = NSMenu()
-        menu.addItem(NSMenuItem(title: "Toggle Overlay  (Cmd+Shift+O)", action: #selector(togglePanel), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "Toggle Chat  (Cmd+Shift+O)", action: #selector(toggleChat), keyEquivalent: ""))
+        menu.addItem(NSMenuItem.separator())
+
+        // Demo menu for testing animations
+        let demoMenu = NSMenu()
+        let demoItem = NSMenuItem(title: "Demo", action: nil, keyEquivalent: "")
+        demoItem.submenu = demoMenu
+        demoMenu.addItem(NSMenuItem(title: "Suggestion", action: #selector(demoSuggestion), keyEquivalent: ""))
+        demoMenu.addItem(NSMenuItem(title: "Warning", action: #selector(demoWarning), keyEquivalent: ""))
+        demoMenu.addItem(NSMenuItem(title: "Excited", action: #selector(demoExcited), keyEquivalent: ""))
+        demoMenu.addItem(NSMenuItem(title: "Reset", action: #selector(demoReset), keyEquivalent: ""))
+        menu.addItem(demoItem)
+
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(quitApp), keyEquivalent: "q"))
 
@@ -105,35 +249,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func handleHotkeyEvent(_ event: NSEvent) -> Bool {
         let required: NSEvent.ModifierFlags = [.command, .shift]
         guard event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(required),
-              event.keyCode == 0x1F // "O"
+              event.keyCode == 0x1F
         else { return false }
 
         DispatchQueue.main.async { [weak self] in
-            self?.togglePanel()
+            self?.overlayState.toggleChat()
         }
         return true
     }
 
-    // MARK: - WebSocket Server (receives proactive suggestions from Python backend)
-
-    private func setupWebSocket() {
-        wsServer = WebSocketServer(port: 9321)
-        wsServer.onMessage = { [weak self] message in
-            Task { @MainActor in
-                self?.viewModel.handleInboundMessage(message)
-            }
-        }
-        wsServer.start()
-    }
-
     // MARK: - Actions
 
-    @objc private func togglePanel() {
-        if panel.isVisible {
-            panel.orderOut(nil)
-        } else {
-            panel.orderFrontRegardless()
-        }
+    @objc private func toggleChat() {
+        overlayState.toggleChat()
+    }
+
+    @objc private func demoSuggestion() {
+        overlayState.handleProposal(text: "This product is $14 cheaper on Amazon", importance: .medium)
+    }
+
+    @objc private func demoWarning() {
+        overlayState.handleWarning(text: "This site looks like your bank but the URL is off by one character")
+    }
+
+    @objc private func demoExcited() {
+        overlayState.handleProposal(text: "That Airbnb you liked in Lisbon dropped 30%", importance: .high)
+        overlayState.mode = .excited
+    }
+
+    @objc private func demoReset() {
+        overlayState.dismissSuggestion()
     }
 
     @objc private func quitApp() {
