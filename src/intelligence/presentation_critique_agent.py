@@ -26,7 +26,7 @@ brief, actionable feedback on visual design only. Focus exclusively on:
 - Style: layout balance, visual hierarchy, spacing, alignment
 
 Rules:
-- Maximum 3 bullet points total
+- 2 most impactful bullet points total
 - Each bullet must be one short sentence
 - Only flag real problems; if the slide looks fine, say so
 - Be specific (e.g. "body text is ~10pt, too small for projection") not generic
