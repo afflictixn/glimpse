@@ -122,11 +122,22 @@ final class ChatViewModel: ObservableObject {
             )
         case .showConversation(let text):
             currentSuggestion = nil
-            messages.append(ChatMessage(role: .assistant, content: text))
+            if let idx = messages.indices.reversed().first(where: { messages[$0].role == .assistant && messages[$0].content.isEmpty }) {
+                // Fill the streaming placeholder instead of appending a duplicate
+                messages[idx].content = text
+            } else if !(messages.last?.role == .assistant && messages.last?.content == text) {
+                // Only append if not a duplicate of the last message
+                messages.append(ChatMessage(role: .assistant, content: text))
+            }
             scrollAnchor = messages.last?.id
         case .appendConversation(let role, let text):
             let chatRole: ChatMessage.Role = role == "user" ? .user : .assistant
-            messages.append(ChatMessage(role: chatRole, content: text))
+            if chatRole == .assistant,
+               let idx = messages.indices.reversed().first(where: { messages[$0].role == .assistant && messages[$0].content.isEmpty }) {
+                messages[idx].content = text
+            } else if !(messages.last?.role == chatRole && messages.last?.content == text) {
+                messages.append(ChatMessage(role: chatRole, content: text))
+            }
             scrollAnchor = messages.last?.id
         case .setAssistantLabel:
             break
