@@ -18,6 +18,8 @@ from src.general_agent.agent import GeneralAgent
 from src.general_agent.tools import ToolRegistry
 from src.llm import create_llm_client
 from src.intelligence.intelligence_layer import IntelligenceLayer
+from src.intelligence.critique_agent import CritiqueReasoningAgent
+from src.process.browser_content_agent import BrowserContentAgent
 from src.process.gemma_agent import GemmaAgent
 from src.process.process_agent import ProcessAgent
 from src.context.context_provider import ContextProvider
@@ -74,12 +76,15 @@ async def run(settings: Settings) -> None:
             include_ocr=settings.include_ocr,
             timeout_s=settings.ollama_timeout_s,
         ),
+        BrowserContentAgent(),
     ]
     context_providers: list[ContextProvider] = []
-    reasoning_agents: list[ReasoningAgent] = []
 
-    # General agent
     llm_client = create_llm_client(settings.llm_provider, settings.llm_model)
+
+    reasoning_agents: list[ReasoningAgent] = [
+        CritiqueReasoningAgent(llm=llm_client),
+    ]
     tool_registry = ToolRegistry(db)
     general_agent = GeneralAgent(
         db=db,

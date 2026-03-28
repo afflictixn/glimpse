@@ -219,7 +219,7 @@ class GeneralAgent:
         data = item.data
 
         # Certain action types are inherently important
-        high_importance_types = {"flag", "escalate", "warn", "alert"}
+        high_importance_types = {"flag", "escalate", "warn", "alert", "critique"}
         if data.get("action_type", "").lower() in high_importance_types:
             score += 0.2
 
@@ -244,7 +244,7 @@ class GeneralAgent:
                 limit="3",
             )
             parsed = json.loads(result)
-            if parsed:
+            if isinstance(parsed, list) and parsed:
                 return f"Related history: {json.dumps(parsed[:2], default=str)}"
         except Exception:
             logger.debug("Enrichment failed", exc_info=True)

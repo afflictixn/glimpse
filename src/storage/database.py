@@ -7,12 +7,24 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import re
+
 import aiosqlite
 
 from src.config import Settings
 from src.storage.models import Action, AdditionalContext, Event, Frame, OCRResult
 
 logger = logging.getLogger(__name__)
+
+_FTS5_SPECIAL = re.compile(r'[^\w\s]', re.UNICODE)
+
+
+def _sanitize_fts5_query(query: str) -> str:
+    """Escape special characters so raw text is safe for FTS5 MATCH."""
+    tokens = _FTS5_SPECIAL.sub(' ', query).split()
+    if not tokens:
+        return '""'
+    return " ".join(f'"{t}"' for t in tokens)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS frames (
@@ -258,7 +270,7 @@ class DatabaseManager:
             "JOIN frames f ON f.id = o.frame_id "
             "WHERE ocr_fts MATCH ?"
         )
-        params: list = [query]
+        params: list = [_sanitize_fts5_query(query)]
         if start_time:
             sql += " AND f.timestamp >= ?"
             params.append(start_time)
@@ -291,7 +303,7 @@ class DatabaseManager:
                 "JOIN frames f ON f.id = e.frame_id "
                 "WHERE events_fts MATCH ?"
             )
-            params: list = [query]
+            params: list = [_sanitize_fts5_query(query)]
         else:
             sql = (
                 "SELECT e.id as event_id, e.frame_id, e.agent_name, e.app_type, "
@@ -336,7 +348,7 @@ class DatabaseManager:
                 "LEFT JOIN frames f ON f.id = c.frame_id "
                 "WHERE context_fts MATCH ?"
             )
-            params: list = [query]
+            params: list = [_sanitize_fts5_query(query)]
         else:
             sql = (
                 "SELECT c.id as context_id, c.frame_id, c.source, c.content_type, "
@@ -385,7 +397,7 @@ class DatabaseManager:
                 "JOIN frames f ON f.id = a.frame_id "
                 "WHERE actions_fts MATCH ?"
             )
-            params: list = [query]
+            params: list = [_sanitize_fts5_query(query)]
         else:
             sql = (
                 "SELECT a.id as action_id, a.event_id, a.frame_id, a.agent_name, "
