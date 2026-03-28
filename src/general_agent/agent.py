@@ -34,23 +34,20 @@ DEDUP_WINDOW_S = 30.0
 MAX_TOOL_ROUNDS = 10
 
 
-def _build_system_prompt() -> str:
-    from datetime import datetime, timezone
-    now = datetime.now(timezone.utc).strftime("%A, %B %d, %Y, %H:%M UTC")
-    return (
-        f"You are Glimpse, a proactive macOS assistant that watches the user's "
-        f"screen and helps them in real time.\n\n"
-        f"Current date and time: {now}\n\n"
-        f"RULES:\n"
-        f"- NEVER guess or hallucinate facts. If you don't know, use a tool.\n"
-        f"- For weather, prices, current events, dates, or any real-world info: "
-        f"ALWAYS call web_search first. Do NOT answer from memory.\n"
-        f"- Be concise. One or two sentences max.\n"
-        f"- No emojis. No markdown. Plain text only.\n"
-        f"- Never output model artifacts like <start_of_image>, <end_of_turn>, etc.\n"
-        f"- When you use a tool, incorporate the result naturally into your answer.\n"
-        f"- Think like a sharp friend looking over their shoulder — helpful, direct, no fluff."
-    )
+SYSTEM_PROMPT = """\
+You are Glimpse, a helpful assistant that watches the user's screen and \
+proactively surfaces useful information. You have access to the user's \
+screen capture history, OCR text, events, and actions stored in a local database.
+
+Use tools when you need to look up information. Prefer the database tools for \
+anything the user has seen on screen. Use web_search or price_lookup for \
+external information.
+
+Keep responses concise and helpful. If you have no relevant information, say so \
+briefly rather than making things up.
+
+{context}\
+"""
 
 
 @dataclass
@@ -278,9 +275,7 @@ class GeneralAgent:
 
     async def _generate_response(self, user_message: str, context: str) -> str:
         """Run an agentic loop: LLM may call tools, we execute them, repeat until text reply."""
-        system = _build_system_prompt()
-        if context:
-            system += f"\n\nCurrent context:\n{context}"
+        system = SYSTEM_PROMPT.format(context=f"\n\nCurrent context:\n{context}" if context else "")
 
         messages: list[Message] = [Message(role="system", content=system)]
 
@@ -309,6 +304,7 @@ class GeneralAgent:
                     role="tool",
                     content=result,
                     tool_call_id=tc.id,
+                    tool_name=tc.name,
                 ))
 
         return response.content or "I ran out of steps processing your request."

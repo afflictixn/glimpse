@@ -32,7 +32,7 @@ class Settings:
     ollama_timeout_s: int = 30
     # LLM
     llm_provider: str = "gemini"
-    llm_model: str = "gemini-3-flash-preview"
+    llm_model: str = "gemini-2.0-flash"
 
     # General agent
     overlay_ws_url: str = "ws://localhost:9321"

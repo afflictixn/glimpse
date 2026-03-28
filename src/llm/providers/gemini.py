@@ -44,7 +44,6 @@ class GeminiClient:
         config_kwargs["tool_config"] = gtypes.ToolConfig(
             include_server_side_tool_invocations=True,
         )
-
         config = gtypes.GenerateContentConfig(**config_kwargs)
 
         response = await self._client.aio.models.generate_content(
@@ -69,6 +68,13 @@ class GeminiClient:
                 system_parts.append(msg.content)
                 continue
 
+            # For assistant messages with tool calls, replay the raw Gemini
+            # Content object to preserve thought_signature on functionCall parts.
+            # This is required by Gemini 3 models.
+            if msg.role == "assistant" and msg.raw_provider_content is not None:
+                contents.append(msg.raw_provider_content)
+                continue
+
             role = "model" if msg.role == "assistant" else "user"
 
             parts: list[gtypes.Part] = []
@@ -89,7 +95,7 @@ class GeminiClient:
             if msg.role == "tool":
                 parts = [gtypes.Part(
                     function_response=gtypes.FunctionResponse(
-                        name="tool",
+                        name=msg.tool_name or msg.tool_call_id,
                         id=msg.tool_call_id,
                         response={"result": msg.content},
                     )
@@ -146,6 +152,7 @@ class GeminiClient:
             role="assistant",
             content="\n".join(text_parts),
             tool_calls=tool_calls,
+            raw_provider_content=candidate.content,
         )
 
 

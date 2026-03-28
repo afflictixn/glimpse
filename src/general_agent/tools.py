@@ -31,6 +31,8 @@ class ToolRegistry:
         self._tools: dict[str, RegisteredTool] = {}
         self._register_builtins()
 
+    _REDDIT_HEADERS = {"User-Agent": "Glimpse/1.0"}
+
     def _register_builtins(self) -> None:
         self.register(RegisteredTool(
             spec=ToolSpec(
@@ -200,6 +202,111 @@ class ToolRegistry:
                 },
             ),
             fn=self._social_search,
+        ))
+
+        self.register(RegisteredTool(
+            spec=ToolSpec(
+                name="imessage_recent",
+                description=(
+                    "Get recent iMessage/SMS conversations with message previews. "
+                    "Returns the latest messages grouped by contact or group chat. "
+                    "Requires Full Disk Access for the Python process."
+                ),
+                parameters={
+                    "limit": "Max conversations to return (default 10)",
+                },
+            ),
+            fn=self._imessage_recent,
+        ))
+        self.register(RegisteredTool(
+            spec=ToolSpec(
+                name="imessage_search",
+                description=(
+                    "Search iMessage/SMS history by keyword. Returns matching messages "
+                    "with sender, timestamp, and conversation context. "
+                    "Use to find past conversations about a topic or with a person."
+                ),
+                parameters={
+                    "query": "Search query string",
+                    "limit": "Max messages to return (default 20)",
+                },
+            ),
+            fn=self._imessage_search,
+        ))
+        self.register(RegisteredTool(
+            spec=ToolSpec(
+                name="imessage_conversation",
+                description=(
+                    "Get messages from a specific iMessage conversation by contact name, "
+                    "phone number, or email. Returns recent messages in chronological order."
+                ),
+                parameters={
+                    "contact": "Contact name, phone number, or email to look up",
+                    "limit": "Max messages to return (default 30)",
+                },
+            ),
+            fn=self._imessage_conversation,
+        ))
+        self.register(RegisteredTool(
+            spec=ToolSpec(
+                name="imessage_send",
+                description=(
+                    "Send an iMessage or SMS to a phone number or email. "
+                    "Uses macOS Shortcuts/AppleScript. The user will see the message "
+                    "appear in their Messages app."
+                ),
+                parameters={
+                    "to": "Phone number or email address to send to",
+                    "message": "Message text to send",
+                },
+            ),
+            fn=self._imessage_send,
+        ))
+
+        self.register(RegisteredTool(
+            spec=ToolSpec(
+                name="reddit_subreddit",
+                description=(
+                    "Get top/hot/new posts from a subreddit. No auth needed. "
+                    "Use to check what's trending in a community or find discussions."
+                ),
+                parameters={
+                    "subreddit": "Subreddit name without r/ (e.g. 'python', 'technology')",
+                    "sort": "Sort by: hot, new, top, rising (default 'hot')",
+                    "limit": "Max posts to return (default 10)",
+                },
+            ),
+            fn=self._reddit_subreddit,
+        ))
+        self.register(RegisteredTool(
+            spec=ToolSpec(
+                name="reddit_comments",
+                description=(
+                    "Get top comments from a Reddit post. Pass the post URL or a post ID + subreddit. "
+                    "Use to see what people are saying about a specific topic."
+                ),
+                parameters={
+                    "url": "Full Reddit post URL (e.g. 'https://reddit.com/r/python/comments/abc123/...')",
+                    "limit": "Max comments to return (default 15)",
+                },
+            ),
+            fn=self._reddit_comments,
+        ))
+        self.register(RegisteredTool(
+            spec=ToolSpec(
+                name="reddit_search",
+                description=(
+                    "Search Reddit posts across all subreddits or within a specific one. "
+                    "Use to find discussions, opinions, reviews, or troubleshooting threads."
+                ),
+                parameters={
+                    "query": "Search query string",
+                    "subreddit": "Limit to a specific subreddit (optional, leave empty for all)",
+                    "sort": "Sort by: relevance, hot, top, new, comments (default 'relevance')",
+                    "limit": "Max posts to return (default 10)",
+                },
+            ),
+            fn=self._reddit_search,
         ))
 
     def register(self, tool: RegisteredTool) -> None:
@@ -484,3 +591,196 @@ class ToolRegistry:
         except Exception as e:
             logger.error("social_search failed: %s", e)
             return json.dumps({"error": f"Social search failed: {e}"})
+
+    # ── Reddit (public JSON API, no auth) ─────────────────────
+
+    async def _reddit_subreddit(
+        self, subreddit: str = "", sort: str = "hot", limit: str = "10",
+    ) -> str:
+        import httpx
+
+        logger.info("reddit_subreddit called: r/%s sort=%s", subreddit, sort)
+        n = min(int(limit), 50)
+        if sort not in ("hot", "new", "top", "rising"):
+            sort = "hot"
+        try:
+            async with httpx.AsyncClient(timeout=10, headers=self._REDDIT_HEADERS, follow_redirects=True) as client:
+                resp = await client.get(
+                    f"https://www.reddit.com/r/{subreddit}/{sort}.json",
+                    params={"limit": n},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+
+            posts = []
+            for child in data.get("data", {}).get("children", []):
+                d = child.get("data", {})
+                posts.append({
+                    "title": d.get("title", ""),
+                    "author": d.get("author", ""),
+                    "score": d.get("score", 0),
+                    "num_comments": d.get("num_comments", 0),
+                    "url": f"https://reddit.com{d.get('permalink', '')}",
+                    "selftext": (d.get("selftext", "") or "")[:500],
+                    "created_utc": d.get("created_utc", 0),
+                    "subreddit": d.get("subreddit", ""),
+                })
+            return json.dumps(posts, default=str)
+        except Exception as e:
+            logger.error("reddit_subreddit failed: %s", e)
+            return json.dumps({"error": f"Reddit subreddit fetch failed: {e}"})
+
+    async def _reddit_comments(self, url: str = "", limit: str = "15") -> str:
+        import httpx
+
+        logger.info("reddit_comments called: %s", url)
+        n = min(int(limit), 50)
+        # Normalize URL to .json endpoint
+        json_url = url.rstrip("/")
+        if not json_url.endswith(".json"):
+            json_url += ".json"
+        try:
+            async with httpx.AsyncClient(timeout=10, headers=self._REDDIT_HEADERS, follow_redirects=True) as client:
+                resp = await client.get(json_url, params={"limit": n, "sort": "top"})
+                resp.raise_for_status()
+                data = resp.json()
+
+            # Reddit returns [post_listing, comments_listing]
+            if not isinstance(data, list) or len(data) < 2:
+                return json.dumps({"error": "Unexpected Reddit response format"})
+
+            comments = []
+            for child in data[1].get("data", {}).get("children", [])[:n]:
+                d = child.get("data", {})
+                if not d.get("body"):
+                    continue
+                comments.append({
+                    "author": d.get("author", ""),
+                    "body": (d.get("body", ""))[:500],
+                    "score": d.get("score", 0),
+                    "created_utc": d.get("created_utc", 0),
+                })
+            return json.dumps(comments, default=str)
+        except Exception as e:
+            logger.error("reddit_comments failed: %s", e)
+            return json.dumps({"error": f"Reddit comments fetch failed: {e}"})
+
+    async def _reddit_search(
+        self, query: str = "", subreddit: str = "", sort: str = "relevance", limit: str = "10",
+    ) -> str:
+        import httpx
+
+        logger.info("reddit_search called: q=%s sub=%s sort=%s", query, subreddit, sort)
+        n = min(int(limit), 50)
+        if sort not in ("relevance", "hot", "top", "new", "comments"):
+            sort = "relevance"
+
+        base = f"https://www.reddit.com/r/{subreddit}/search.json" if subreddit else "https://www.reddit.com/search.json"
+        params: dict[str, Any] = {"q": query, "limit": n, "sort": sort}
+        if subreddit:
+            params["restrict_sr"] = "on"
+
+        try:
+            async with httpx.AsyncClient(timeout=10, headers=self._REDDIT_HEADERS, follow_redirects=True) as client:
+                resp = await client.get(base, params=params)
+                resp.raise_for_status()
+                data = resp.json()
+
+            posts = []
+            for child in data.get("data", {}).get("children", []):
+                d = child.get("data", {})
+                posts.append({
+                    "title": d.get("title", ""),
+                    "author": d.get("author", ""),
+                    "score": d.get("score", 0),
+                    "num_comments": d.get("num_comments", 0),
+                    "subreddit": d.get("subreddit", ""),
+                    "url": f"https://reddit.com{d.get('permalink', '')}",
+                    "selftext": (d.get("selftext", "") or "")[:300],
+                    "created_utc": d.get("created_utc", 0),
+                })
+            return json.dumps(posts, default=str)
+        except Exception as e:
+            logger.error("reddit_search failed: %s", e)
+            return json.dumps({"error": f"Reddit search failed: {e}"})
+
+    # ── iMessage (via overlay server on port 9322) ─────────────
+    # The overlay app has Full Disk Access to read ~/Library/Messages/chat.db
+
+    async def _imessage_recent(self, limit: str = "10") -> str:
+        import httpx
+
+        logger.info("imessage_recent called: limit=%s", limit)
+        n = min(int(limit), 50)
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(
+                    f"http://localhost:9322/imessage/recent",
+                    params={"limit": n},
+                )
+                return resp.text
+        except Exception as e:
+            logger.error("imessage_recent failed: %s", e)
+            return json.dumps({"error": f"iMessage unavailable. Make sure the Glimpse overlay is running. ({e})"})
+
+    async def _imessage_search(self, query: str = "", limit: str = "20") -> str:
+        import httpx
+
+        logger.info("imessage_search called: q=%s", query)
+        n = min(int(limit), 100)
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(
+                    f"http://localhost:9322/imessage/search",
+                    params={"q": query, "limit": n},
+                )
+                return resp.text
+        except Exception as e:
+            logger.error("imessage_search failed: %s", e)
+            return json.dumps({"error": f"iMessage search unavailable. ({e})"})
+
+    async def _imessage_conversation(self, contact: str = "", limit: str = "30") -> str:
+        import httpx
+
+        logger.info("imessage_conversation called: contact=%s", contact)
+        n = min(int(limit), 100)
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(
+                    f"http://localhost:9322/imessage/conversation",
+                    params={"contact": contact, "limit": n},
+                )
+                return resp.text
+        except Exception as e:
+            logger.error("imessage_conversation failed: %s", e)
+            return json.dumps({"error": f"iMessage conversation unavailable. ({e})"})
+
+    async def _imessage_send(self, to: str = "", message: str = "") -> str:
+        import subprocess
+
+        logger.info("imessage_send called: to=%s", to)
+        if not to or not message:
+            return json.dumps({"error": "Both 'to' and 'message' are required"})
+
+        safe_msg = message.replace("\\", "\\\\").replace('"', '\\"')
+        safe_to = to.replace("\\", "\\\\").replace('"', '\\"')
+
+        script = f'''
+        tell application "Messages"
+            set targetService to 1st account whose service type = iMessage
+            set targetBuddy to participant "{safe_to}" of targetService
+            send "{safe_msg}" to targetBuddy
+        end tell
+        '''
+        try:
+            result = subprocess.run(
+                ["osascript", "-e", script],
+                capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode == 0:
+                return json.dumps({"sent": True, "to": to, "message": message})
+            else:
+                return json.dumps({"error": f"AppleScript failed: {result.stderr.strip()}"})
+        except Exception as e:
+            logger.error("imessage_send failed: %s", e)
+            return json.dumps({"error": f"iMessage send failed: {e}"})
