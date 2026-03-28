@@ -20,5 +20,3 @@ When asked to start, launch, or run the app:
 When asked to stop the app, run `./start.sh --kill`.
 
 When asked to restart a specific service, run `./start.sh --restart <service>` where service is `overlay`, `backend`, or `ollama`.
-
-**Important**: Always activate conda first with `conda_ai` before running `start.sh`.
