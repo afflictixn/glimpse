@@ -11,7 +11,8 @@ let package = Package(
             linkerSettings: [
                 .linkedFramework("Carbon"),
                 .linkedFramework("Network"),
-                .linkedFramework("EventKit")
+                .linkedFramework("EventKit"),
+                .linkedLibrary("sqlite3")
             ]
         )
     ]

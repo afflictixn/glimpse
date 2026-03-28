@@ -1,18 +1,27 @@
 import Foundation
 import EventKit
 import Network
+import SQLite3
 
-/// Tiny HTTP server on port 9322 that exposes calendar events.
-/// The Python backend calls GET /calendar?days=7 to fetch events
-/// through the overlay's app-level EventKit permission.
+/// Local HTTP server (port 9322) that exposes macOS-protected data to the Python backend.
+/// Routes:
+///   GET /calendar?days=7     — calendar events (requires Calendar permission)
+///   GET /imessage/recent?limit=10  — recent iMessage conversations (requires Full Disk Access)
+///   GET /imessage/search?q=hello&limit=20  — search iMessage history
+///   GET /imessage/conversation?contact=John&limit=30  — messages with a contact
 final class CalendarServer {
     private let store = EKEventStore()
     private var listener: NWListener?
-    private let queue = DispatchQueue(label: "calendar-server", qos: .utility)
-    private(set) var hasAccess = false
+    private let queue = DispatchQueue(label: "overlay-server", qos: .utility)
+    private(set) var hasCalendarAccess = false
+
+    private let chatDBPath: String = {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return "\(home)/Library/Messages/chat.db"
+    }()
 
     func start() {
-        requestAccess()
+        requestCalendarAccess()
         startListener()
     }
 
@@ -20,33 +29,33 @@ final class CalendarServer {
         listener?.cancel()
     }
 
-    // MARK: - Permission
+    // MARK: - Calendar Permission
 
-    private func requestAccess() {
+    private func requestCalendarAccess() {
         let status = EKEventStore.authorizationStatus(for: .event)
 
         if #available(macOS 14.0, *) {
             if status == .fullAccess {
-                hasAccess = true
-                print("[calendar] already authorized (fullAccess)")
+                hasCalendarAccess = true
+                print("[server] calendar: already authorized (fullAccess)")
                 return
             }
         }
         if status == .authorized {
-            hasAccess = true
-            print("[calendar] already authorized")
+            hasCalendarAccess = true
+            print("[server] calendar: already authorized")
             return
         }
 
         if #available(macOS 14.0, *) {
             store.requestFullAccessToEvents { [weak self] granted, error in
-                self?.hasAccess = granted
-                print("[calendar] fullAccess request: granted=\(granted)")
+                self?.hasCalendarAccess = granted
+                print("[server] calendar fullAccess: granted=\(granted)")
             }
         } else {
             store.requestAccess(to: .event) { [weak self] granted, error in
-                self?.hasAccess = granted
-                print("[calendar] access request: granted=\(granted)")
+                self?.hasCalendarAccess = granted
+                print("[server] calendar access: granted=\(granted)")
             }
         }
     }
@@ -60,9 +69,9 @@ final class CalendarServer {
         listener?.stateUpdateHandler = { state in
             switch state {
             case .ready:
-                print("[calendar] HTTP server listening on port 9322")
+                print("[server] listening on port 9322 (calendar + imessage)")
             case .failed(let err):
-                print("[calendar] listener failed: \(err)")
+                print("[server] listener failed: \(err)")
             default:
                 break
             }
@@ -75,42 +84,45 @@ final class CalendarServer {
         listener?.start(queue: queue)
     }
 
-    // MARK: - Request Handling
+    // MARK: - Request Routing
 
     private func handleConnection(_ connection: NWConnection) {
         connection.start(queue: queue)
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 4096) { [weak self] data, _, _, error in
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 8192) { [weak self] data, _, _, error in
             guard let self = self, let data = data else {
                 connection.cancel()
                 return
             }
 
-            let request = String(data: data, encoding: .utf8) ?? ""
-            let response = self.handleRequest(request)
-            let httpResponse = self.buildHTTPResponse(body: response)
+            let raw = String(data: data, encoding: .utf8) ?? ""
+            let response: String
 
+            if raw.contains("/imessage/recent") {
+                response = self.handleIMessageRecent(raw)
+            } else if raw.contains("/imessage/search") {
+                response = self.handleIMessageSearch(raw)
+            } else if raw.contains("/imessage/conversation") {
+                response = self.handleIMessageConversation(raw)
+            } else if raw.contains("/calendar") {
+                response = self.handleCalendar(raw)
+            } else {
+                response = "{\"error\": \"Unknown endpoint. Use /calendar, /imessage/recent, /imessage/search, or /imessage/conversation\"}"
+            }
+
+            let httpResponse = self.buildHTTPResponse(body: response)
             connection.send(content: httpResponse.data(using: .utf8), completion: .contentProcessed { _ in
                 connection.cancel()
             })
         }
     }
 
-    private func handleRequest(_ raw: String) -> String {
-        // Parse days from query: GET /calendar?days=7
-        var days = 7
-        if let range = raw.range(of: "days=") {
-            let start = range.upperBound
-            let rest = raw[start...]
-            if let end = rest.firstIndex(where: { !$0.isNumber }) {
-                days = Int(rest[start..<end]) ?? 7
-            } else {
-                days = Int(rest) ?? 7
-            }
-        }
-        days = min(days, 30)
+    // MARK: - Calendar Handler
 
-        guard hasAccess else {
-            return "{\"error\": \"Calendar access not granted. Allow in System Settings > Privacy > Calendars for GlimpseOverlay.\"}"
+    private func handleCalendar(_ raw: String) -> String {
+        let days = min(parseIntParam(raw, name: "days", fallback: 7), 30)
+
+        guard hasCalendarAccess else {
+            return "{\"error\": \"Calendar access not granted. Allow in System Settings > Privacy > Calendars.\"}"
         }
 
         let start = Date()
@@ -122,40 +134,176 @@ final class CalendarServer {
             return "{\"events\": [], \"note\": \"No events in the next \(days) days.\"}"
         }
 
+        let fmt = ISO8601DateFormatter()
         var results: [[String: Any]] = []
         for event in events.prefix(50) {
             var entry: [String: Any] = [
                 "title": event.title ?? "",
-                "start": ISO8601DateFormatter().string(from: event.startDate),
-                "end": ISO8601DateFormatter().string(from: event.endDate),
+                "start": fmt.string(from: event.startDate),
+                "end": fmt.string(from: event.endDate),
                 "all_day": event.isAllDay,
             ]
-            if let loc = event.location, !loc.isEmpty {
-                entry["location"] = loc
-            }
-            if let notes = event.notes, !notes.isEmpty {
-                entry["notes"] = String(notes.prefix(200))
-            }
+            if let loc = event.location, !loc.isEmpty { entry["location"] = loc }
+            if let notes = event.notes, !notes.isEmpty { entry["notes"] = String(notes.prefix(200)) }
             results.append(entry)
         }
 
-        guard let jsonData = try? JSONSerialization.data(withJSONObject: results),
-              let jsonStr = String(data: jsonData, encoding: .utf8) else {
-            return "{\"error\": \"Failed to serialize events\"}"
+        return toJSON(results)
+    }
+
+    // MARK: - iMessage Handlers
+
+    private func handleIMessageRecent(_ raw: String) -> String {
+        let limit = min(parseIntParam(raw, name: "limit", fallback: 10), 50)
+
+        let sql = """
+            SELECT
+                c.display_name,
+                c.chat_identifier,
+                m.text,
+                datetime(m.date/1000000000 + 978307200, 'unixepoch', 'localtime') as msg_date,
+                m.is_from_me
+            FROM message m
+            JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
+            JOIN chat c ON c.ROWID = cmj.chat_id
+            WHERE m.text IS NOT NULL AND m.text != ''
+            ORDER BY m.date DESC
+            LIMIT \(limit)
+        """
+
+        return queryMessageDB(sql)
+    }
+
+    private func handleIMessageSearch(_ raw: String) -> String {
+        let query = parseStringParam(raw, name: "q") ?? ""
+        let limit = min(parseIntParam(raw, name: "limit", fallback: 20), 100)
+
+        guard !query.isEmpty else {
+            return "{\"error\": \"Missing required parameter: q\"}"
         }
-        return jsonStr
+
+        let sql = """
+            SELECT
+                c.display_name,
+                c.chat_identifier,
+                m.text,
+                datetime(m.date/1000000000 + 978307200, 'unixepoch', 'localtime') as msg_date,
+                m.is_from_me
+            FROM message m
+            JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
+            JOIN chat c ON c.ROWID = cmj.chat_id
+            WHERE m.text LIKE '%\(query.replacingOccurrences(of: "'", with: "''"))%'
+            ORDER BY m.date DESC
+            LIMIT \(limit)
+        """
+
+        return queryMessageDB(sql)
+    }
+
+    private func handleIMessageConversation(_ raw: String) -> String {
+        let contact = parseStringParam(raw, name: "contact") ?? ""
+        let limit = min(parseIntParam(raw, name: "limit", fallback: 30), 100)
+
+        guard !contact.isEmpty else {
+            return "{\"error\": \"Missing required parameter: contact\"}"
+        }
+
+        let escaped = contact.replacingOccurrences(of: "'", with: "''")
+
+        let sql = """
+            SELECT
+                c.display_name,
+                c.chat_identifier,
+                m.text,
+                datetime(m.date/1000000000 + 978307200, 'unixepoch', 'localtime') as msg_date,
+                m.is_from_me
+            FROM message m
+            JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
+            JOIN chat c ON c.ROWID = cmj.chat_id
+            WHERE m.text IS NOT NULL AND m.text != ''
+                AND (c.display_name LIKE '%\(escaped)%'
+                     OR c.chat_identifier LIKE '%\(escaped)%')
+            ORDER BY m.date DESC
+            LIMIT \(limit)
+        """
+
+        return queryMessageDB(sql)
+    }
+
+    private func queryMessageDB(_ sql: String) -> String {
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(chatDBPath, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else {
+            let err = db.flatMap { String(cString: sqlite3_errmsg($0)) } ?? "unknown"
+            sqlite3_close(db)
+            return "{\"error\": \"Cannot open Messages database. Grant Full Disk Access to GlimpseOverlay in System Settings > Privacy > Full Disk Access. (\(err))\"}"
+        }
+        defer { sqlite3_close(db) }
+
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            let err = String(cString: sqlite3_errmsg(db!))
+            return "{\"error\": \"SQL error: \(err)\"}"
+        }
+        defer { sqlite3_finalize(stmt) }
+
+        var results: [[String: Any]] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            let colCount = sqlite3_column_count(stmt)
+            var row: [String: Any] = [:]
+            for i in 0..<colCount {
+                let name = String(cString: sqlite3_column_name(stmt, i))
+                switch sqlite3_column_type(stmt, i) {
+                case SQLITE_TEXT:
+                    row[name] = String(cString: sqlite3_column_text(stmt, i))
+                case SQLITE_INTEGER:
+                    row[name] = sqlite3_column_int64(stmt, i)
+                case SQLITE_FLOAT:
+                    row[name] = sqlite3_column_double(stmt, i)
+                default:
+                    row[name] = NSNull()
+                }
+            }
+            results.append(row)
+        }
+
+        if results.isEmpty {
+            return "{\"messages\": [], \"note\": \"No messages found.\"}"
+        }
+
+        return toJSON(results)
+    }
+
+    // MARK: - Helpers
+
+    private func parseIntParam(_ raw: String, name: String, fallback: Int) -> Int {
+        guard let range = raw.range(of: "\(name)=") else { return fallback }
+        let start = range.upperBound
+        let rest = raw[start...]
+        if let end = rest.firstIndex(where: { !$0.isNumber }) {
+            return Int(rest[start..<end]) ?? fallback
+        }
+        return Int(rest) ?? fallback
+    }
+
+    private func parseStringParam(_ raw: String, name: String) -> String? {
+        guard let range = raw.range(of: "\(name)=") else { return nil }
+        let start = range.upperBound
+        let rest = raw[start...]
+        let end = rest.firstIndex(where: { $0 == "&" || $0 == " " || $0 == "\r" || $0 == "\n" }) ?? rest.endIndex
+        let value = String(rest[start..<end])
+        return value.removingPercentEncoding ?? value
+    }
+
+    private func toJSON(_ obj: Any) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: obj),
+              let str = String(data: data, encoding: .utf8) else {
+            return "{\"error\": \"JSON serialization failed\"}"
+        }
+        return str
     }
 
     private func buildHTTPResponse(body: String) -> String {
         let contentLength = body.utf8.count
-        return """
-        HTTP/1.1 200 OK\r
-        Content-Type: application/json\r
-        Content-Length: \(contentLength)\r
-        Access-Control-Allow-Origin: *\r
-        Connection: close\r
-        \r
-        \(body)
-        """
+        return "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: \(contentLength)\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n\(body)"
     }
 }
