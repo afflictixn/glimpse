@@ -74,17 +74,6 @@ class ToolRegistry:
         ))
         self.register(RegisteredTool(
             spec=ToolSpec(
-                name="web_search",
-                description=(
-                    "Search the web for information. Returns a summary of top results. "
-                    "Use for price checks, fact verification, looking up people/companies, etc."
-                ),
-                parameters={"query": "Search query string"},
-            ),
-            fn=self._web_search,
-        ))
-        self.register(RegisteredTool(
-            spec=ToolSpec(
                 name="fetch_url",
                 description=(
                     "Fetch and extract text content from a URL. Use to read page content "
@@ -93,17 +82,6 @@ class ToolRegistry:
                 parameters={"url": "The URL to fetch"},
             ),
             fn=self._fetch_url,
-        ))
-        self.register(RegisteredTool(
-            spec=ToolSpec(
-                name="price_lookup",
-                description=(
-                    "Look up current prices for a product across sources. "
-                    "Searches the web with price-focused queries and returns comparisons."
-                ),
-                parameters={"product": "Product name or description to look up"},
-            ),
-            fn=self._price_lookup,
         ))
         self.register(RegisteredTool(
             spec=ToolSpec(

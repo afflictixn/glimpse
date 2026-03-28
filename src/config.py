@@ -33,7 +33,7 @@ class Settings:
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "gemma3:4b"
     include_ocr: bool = False
-    ollama_timeout_s: int = 5
+    ollama_timeout_s: int = 30
     ollama_max_image_width: int = 960
     # LLM
     llm_provider: str = "gemini"
