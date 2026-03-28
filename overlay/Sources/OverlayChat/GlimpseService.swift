@@ -1,26 +1,26 @@
 import Foundation
 
-/// Client for the Glimpse FastAPI backend (localhost:3030)
+/// Client for the Z Exp FastAPI backend (localhost:3030)
 /// and Ollama (localhost:11434) for direct chat.
-final class GlimpseService {
-    let glimpseURL: URL
+final class ZExpService {
+    let backendURL: URL
     let ollamaURL: URL
     let chatModel: String
 
     init(
-        glimpseURL: URL = URL(string: "http://localhost:3030")!,
+        backendURL: URL = URL(string: "http://localhost:3030")!,
         ollamaURL: URL = URL(string: "http://localhost:11434")!,
         chatModel: String = "gemma3:12b"
     ) {
-        self.glimpseURL = glimpseURL
+        self.backendURL = backendURL
         self.ollamaURL = ollamaURL
         self.chatModel = chatModel
     }
 
     // MARK: - Health
 
-    func isGlimpseAvailable() async -> Bool {
-        let url = glimpseURL.appendingPathComponent("health")
+    func isBackendAvailable() async -> Bool {
+        let url = backendURL.appendingPathComponent("health")
         guard let (_, response) = try? await URLSession.shared.data(from: url),
               let http = response as? HTTPURLResponse else { return false }
         return http.statusCode == 200
@@ -33,24 +33,24 @@ final class GlimpseService {
         return http.statusCode == 200
     }
 
-    // MARK: - Glimpse Data Routes
+    // MARK: - Z Exp Data Routes
 
     func fetchRecentActions(limit: Int = 10) async throws -> [ActionResult] {
-        var components = URLComponents(url: glimpseURL.appendingPathComponent("actions"), resolvingAgainstBaseURL: false)!
+        var components = URLComponents(url: backendURL.appendingPathComponent("actions"), resolvingAgainstBaseURL: false)!
         components.queryItems = [URLQueryItem(name: "limit", value: "\(limit)")]
         let (data, _) = try await URLSession.shared.data(from: components.url!)
         return try JSONDecoder().decode([ActionResult].self, from: data)
     }
 
     func fetchRecentEvents(limit: Int = 10) async throws -> [EventResult] {
-        var components = URLComponents(url: glimpseURL.appendingPathComponent("events"), resolvingAgainstBaseURL: false)!
+        var components = URLComponents(url: backendURL.appendingPathComponent("events"), resolvingAgainstBaseURL: false)!
         components.queryItems = [URLQueryItem(name: "limit", value: "\(limit)")]
         let (data, _) = try await URLSession.shared.data(from: components.url!)
         return try JSONDecoder().decode([EventResult].self, from: data)
     }
 
     func searchOCR(query: String, limit: Int = 10) async throws -> [OCRSearchResult] {
-        var components = URLComponents(url: glimpseURL.appendingPathComponent("search"), resolvingAgainstBaseURL: false)!
+        var components = URLComponents(url: backendURL.appendingPathComponent("search"), resolvingAgainstBaseURL: false)!
         components.queryItems = [
             URLQueryItem(name: "q", value: query),
             URLQueryItem(name: "limit", value: "\(limit)"),
@@ -59,7 +59,7 @@ final class GlimpseService {
         return try JSONDecoder().decode([OCRSearchResult].self, from: data)
     }
 
-    // MARK: - Chat via Glimpse backend (POST /agent/chat)
+    // MARK: - Chat via Z Exp backend (POST /agent/chat)
     //
     // Routes through the Python GeneralAgent which has access to tools
     // (web search, memory, contacts, calendar, DB queries, etc.)
@@ -73,7 +73,7 @@ final class GlimpseService {
     }
 
     func sendChat(message: String) async throws -> String {
-        let url = glimpseURL.appendingPathComponent("agent/chat")
+        let url = backendURL.appendingPathComponent("agent/chat")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -84,14 +84,14 @@ final class GlimpseService {
         let (data, response) = try await URLSession.shared.data(for: request)
 
         if let http = response as? HTTPURLResponse, http.statusCode != 200 {
-            throw GlimpseError.httpError(http.statusCode)
+            throw ZExpError.httpError(http.statusCode)
         }
 
         let decoded = try JSONDecoder().decode(AgentChatResponse.self, from: data)
         return decoded.response
     }
 
-    // MARK: - Build context summary from Glimpse data
+    // MARK: - Build context summary from Z Exp data
 
     func buildContextSummary() async -> String? {
         var parts: [String] = []
@@ -115,7 +115,7 @@ final class GlimpseService {
 
     // MARK: - Types
 
-    enum GlimpseError: LocalizedError {
+    enum ZExpError: LocalizedError {
         case httpError(Int)
         case backendUnavailable
 
@@ -124,7 +124,7 @@ final class GlimpseService {
             case .httpError(let code):
                 return "Backend returned HTTP \(code)"
             case .backendUnavailable:
-                return "Glimpse backend not reachable"
+                return "Z Exp backend not reachable"
             }
         }
     }

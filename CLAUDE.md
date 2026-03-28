@@ -1,4 +1,4 @@
-# Glimpse — Agent Guidelines
+# Z Exp — Agent Guidelines
 
 ## Running the app
 
@@ -14,11 +14,11 @@ This launches three processes:
 2. **Python backend** (port 3030) — capture loop, OCR, agents, API, general agent
 3. **Swift overlay** — macOS floating panel (Cmd+Shift+O to toggle), WebSocket on port 9321
 
-Logs go to `/tmp/glimpse-backend.log` and `/tmp/glimpse-overlay.log`.
+Logs go to `/tmp/zexp-backend.log` and `/tmp/zexp-overlay.log`.
 
-## What is Glimpse
+## What is Z Exp
 
-Glimpse is a macOS-native screen activity capture and intelligence service. It continuously captures screenshots triggered by user input events, runs OCR and vision-LLM analysis, and exposes everything through a FastAPI REST API backed by SQLite with FTS5 full-text search.
+Z Exp is a macOS-native screen activity capture and intelligence service. The assistant is named Z. It continuously captures screenshots triggered by user input events, runs OCR and vision-LLM analysis, and exposes everything through a FastAPI REST API backed by SQLite with FTS5 full-text search.
 
 ```
 
@@ -72,7 +72,7 @@ Glimpse is a macOS-native screen activity capture and intelligence service. It c
 │  SQLite (WAL) + FTS5             │ │  In-process, long-running loop     │
 │  frames, ocr_text, events,       │ │  Receives events + actions via     │
 │  context, actions + FTS indexes  │ │  direct method calls from capture  │
-│  JPEG files ~/.glimpse/data/     │ │  loop and intelligence layer       │
+│  JPEG files ~/.zexp/data/        │ │  loop and intelligence layer       │
 │  Periodic retention cleanup      │ │  Uses tools (DB, web search stubs) │
 │                                  │ │  Pushes proposals → overlay via WS │
 │                                  │ │  Maintains conversation context    │

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Glimpse — start all services
+# Z Exp — start all services
 # Usage: ./start.sh [--kill]
 
 set -e
@@ -18,9 +18,9 @@ NC='\033[0m'
 
 # Kill helper
 kill_all() {
-    echo -e "${YELLOW}Stopping all Glimpse services...${NC}"
+    echo -e "${YELLOW}Stopping all Z Exp services...${NC}"
     pkill -f "ollama serve" 2>/dev/null && echo "  ollama stopped" || true
-    pkill -f GlimpseOverlay 2>/dev/null && echo "  overlay stopped" || true
+    pkill -f ZExpOverlay 2>/dev/null && echo "  overlay stopped" || true
     pkill -f "src.main" 2>/dev/null && echo "  backend stopped" || true
     echo -e "${GREEN}All stopped.${NC}"
 }
@@ -42,16 +42,16 @@ if [ "$1" = "--restart" ] || [ "$1" = "-r" ]; then
         case "$SERVICE" in
             overlay|swift)
                 echo -e "${YELLOW}Restarting overlay...${NC}"
-                pkill -f GlimpseOverlay 2>/dev/null || true
+                pkill -f ZExpOverlay 2>/dev/null || true
                 sleep 1
                 cd overlay
-                swift run GlimpseOverlay > /tmp/glimpse-overlay.log 2>&1 &
+                swift run ZExpOverlay > /tmp/zexp-overlay.log 2>&1 &
                 cd ..
                 sleep 3
-                if pgrep -f GlimpseOverlay > /dev/null 2>&1; then
+                if pgrep -f ZExpOverlay > /dev/null 2>&1; then
                     echo -e "  ${GREEN}✓${NC} Overlay restarted"
                 else
-                    echo -e "  ${RED}✗${NC} Overlay failed (check /tmp/glimpse-overlay.log)"
+                    echo -e "  ${RED}✗${NC} Overlay failed (check /tmp/zexp-overlay.log)"
                 fi
                 exit 0
                 ;;
@@ -60,12 +60,12 @@ if [ "$1" = "--restart" ] || [ "$1" = "-r" ]; then
                 pkill -f "src.main" 2>/dev/null || true
                 sleep 1
                 source venv/bin/activate 2>/dev/null || true
-                python -m src.main --port 3030 > /tmp/glimpse-backend.log 2>&1 &
+                python -m src.main --port 3030 > /tmp/zexp-backend.log 2>&1 &
                 sleep 2
                 if curl -s http://localhost:3030/health > /dev/null 2>&1; then
                     echo -e "  ${GREEN}✓${NC} Backend restarted (port 3030)"
                 else
-                    echo -e "  ${YELLOW}~${NC} Backend starting... (check /tmp/glimpse-backend.log)"
+                    echo -e "  ${YELLOW}~${NC} Backend starting... (check /tmp/zexp-backend.log)"
                 fi
                 exit 0
                 ;;
@@ -91,7 +91,7 @@ if [ "$1" = "--restart" ] || [ "$1" = "-r" ]; then
     fi
 fi
 
-echo -e "${GREEN}Starting Glimpse...${NC}"
+echo -e "${GREEN}Starting Z Exp...${NC}"
 
 # 1. Ollama
 if curl -s http://localhost:11434/api/tags > /dev/null 2>&1; then
@@ -108,39 +108,39 @@ else
 fi
 
 # 2. Swift overlay (bundled .app for macOS permissions)
-if pgrep -f GlimpseOverlay > /dev/null 2>&1; then
+if pgrep -f ZExpOverlay > /dev/null 2>&1; then
     echo -e "  ${GREEN}✓${NC} Overlay already running"
 else
     echo -e "  ${YELLOW}→${NC} Building & starting overlay..."
     cd overlay
-    bash bundle.sh > /tmp/glimpse-overlay-build.log 2>&1
-    open .build/GlimpseOverlay.app > /tmp/glimpse-overlay.log 2>&1
+    bash bundle.sh > /tmp/zexp-overlay-build.log 2>&1
+    open .build/ZExpOverlay.app > /tmp/zexp-overlay.log 2>&1
     cd ..
     sleep 3
-    if pgrep -f GlimpseOverlay > /dev/null 2>&1; then
+    if pgrep -f ZExpOverlay > /dev/null 2>&1; then
         echo -e "  ${GREEN}✓${NC} Overlay started (Cmd+Shift+O to toggle)"
     else
-        echo -e "  ${RED}✗${NC} Overlay failed (check /tmp/glimpse-overlay.log)"
+        echo -e "  ${RED}✗${NC} Overlay failed (check /tmp/zexp-overlay.log)"
     fi
 fi
 
 # 3. Python backend
 if curl -s http://localhost:3030/health > /dev/null 2>&1; then
-    echo -e "  ${GREEN}✓${NC} Glimpse backend already running"
+    echo -e "  ${GREEN}✓${NC} Z Exp backend already running"
 else
-    echo -e "  ${YELLOW}→${NC} Starting Glimpse backend..."
-    source .venv/bin/activate 2>/dev/null || true
-    python -m src.main --port 3030 > /tmp/glimpse-backend.log 2>&1 &
+    echo -e "  ${YELLOW}→${NC} Starting Z Exp backend..."
+    source venv/bin/activate 2>/dev/null || true
+    python -m src.main --port 3030 > /tmp/zexp-backend.log 2>&1 &
     sleep 2
     if curl -s http://localhost:3030/health > /dev/null 2>&1; then
-        echo -e "  ${GREEN}✓${NC} Glimpse backend started (port 3030)"
+        echo -e "  ${GREEN}✓${NC} Z Exp backend started (port 3030)"
     else
-        echo -e "  ${YELLOW}~${NC} Glimpse backend starting... (check /tmp/glimpse-backend.log)"
+        echo -e "  ${YELLOW}~${NC} Z Exp backend starting... (check /tmp/zexp-backend.log)"
     fi
 fi
 
 echo ""
-echo -e "${GREEN}Glimpse is running.${NC}"
+echo -e "${GREEN}Z Exp is running.${NC}"
 echo "  Ollama:   http://localhost:11434"
 echo "  Backend:  http://localhost:3030"
 echo "  Overlay:  Cmd+Shift+O to toggle"

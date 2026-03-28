@@ -2,11 +2,11 @@
 import PackageDescription
 
 let package = Package(
-    name: "GlimpseOverlay",
+    name: "ZExpOverlay",
     platforms: [.macOS(.v13)],
     targets: [
         .executableTarget(
-            name: "GlimpseOverlay",
+            name: "ZExpOverlay",
             path: "Sources/OverlayChat",
             linkerSettings: [
                 .linkedFramework("Carbon"),

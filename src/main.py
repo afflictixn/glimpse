@@ -28,18 +28,18 @@ from src.storage.database import DatabaseManager
 from src.storage.snapshot_writer import SnapshotWriter
 from src.voice.tts import VoiceClient
 
-logger = logging.getLogger("glimpse")
+logger = logging.getLogger("zexp")
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Glimpse - macOS screenshot capture & intelligence")
+    parser = argparse.ArgumentParser(description="Z Exp - macOS screenshot capture & intelligence")
     parser.add_argument("--port", type=int, default=3030, help="API server port")
-    parser.add_argument("--data-dir", type=str, default=str(Path.home() / ".glimpse"), help="Data directory")
+    parser.add_argument("--data-dir", type=str, default=str(Path.home() / ".zexp"), help="Data directory")
     parser.add_argument("--jpeg-quality", type=int, default=80, help="JPEG quality (1-100)")
     parser.add_argument("--retention-days", type=int, default=7, help="Data retention in days")
     parser.add_argument("--max-db-size-mb", type=int, default=10_000, help="Max database size in MB")
     parser.add_argument("--log-level", type=str, default="INFO", help="Logging level")
-    parser.add_argument("--debug", action="store_true", help="Enable debug logging for glimpse internals (suppresses third-party noise)")
+    parser.add_argument("--debug", action="store_true", help="Enable debug logging for Z Exp internals (suppresses third-party noise)")
     parser.add_argument("--ollama-model", type=str, default="gemma3:12b", help="Ollama model name")
     parser.add_argument("--ollama-url", type=str, default="http://localhost:11434", help="Ollama server base URL")
     parser.add_argument("--include-ocr", action="store_true", help="Include OCR text in Gemma agent prompt")
@@ -135,7 +135,14 @@ async def run(settings: Settings) -> None:
         general_agent=general_agent,
     )
 
-    app = create_app(db, general_agent=general_agent)
+    app = create_app(
+        db,
+        general_agent=general_agent,
+        snapshot_writer=snapshot_writer,
+        process_agents=process_agents,
+        context_providers=context_providers,
+        intelligence_layer=intelligence,
+    )
 
     config = uvicorn.Config(
         app,
@@ -164,7 +171,7 @@ async def run(settings: Settings) -> None:
         cleanup_task(db, settings.cleanup_interval_hours)
     )
 
-    logger.info("Glimpse started on port %d, data dir: %s", settings.port, settings.data_dir)
+    logger.info("Z Exp started on port %d, data dir: %s", settings.port, settings.data_dir)
 
     await shutdown_event.wait()
 
@@ -186,7 +193,7 @@ async def run(settings: Settings) -> None:
 
     event_tap.stop()
     await db.close()
-    logger.info("Glimpse stopped")
+    logger.info("Z Exp stopped")
 
 
 def _configure_logging(args: argparse.Namespace) -> None:
@@ -197,7 +204,7 @@ def _configure_logging(args: argparse.Namespace) -> None:
             datefmt="%H:%M:%S",
         )
         logging.getLogger("src").setLevel(logging.DEBUG)
-        logging.getLogger("glimpse").setLevel(logging.DEBUG)
+        logging.getLogger("zexp").setLevel(logging.DEBUG)
         logging.getLogger("uvicorn.access").setLevel(logging.INFO)
     else:
         logging.basicConfig(

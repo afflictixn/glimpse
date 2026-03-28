@@ -61,7 +61,7 @@ isProject: false
 
 # Python Screenshot + OCR API Layer for macOS
 
-Build everything under glimpse/src
+Build everything under src/
 
 ## Architecture Overview
 
@@ -101,7 +101,7 @@ flowchart TB
 
     subgraph storage [Storage Layer]
         DB[(SQLite + FTS5)]
-        FS[JPEG Files\n~/.glimpse/data/]
+        FS[JPEG Files\n~/.zexp/data/]
     end
 
     subgraph api [API Layer]
@@ -193,7 +193,7 @@ glimpse/
 │       │   ├── __init__.py
 │       │   ├── database.py         # SQLite + FTS5 manager
 │       │   ├── models.py           # All dataclasses: Frame, OCRResult, Event, AdditionalContext, Action
-│       │   └── snapshot_writer.py  # JPEG writer to ~/.glimpse/data/
+│       │   └── snapshot_writer.py  # JPEG writer to ~/.zexp/data/
 │       └── api/
 │           ├── __init__.py
 │           ├── server.py           # FastAPI app
@@ -422,7 +422,7 @@ Abstract base class that takes a screenshot and produces structured `Event` obje
 ```python
 from abc import ABC, abstractmethod
 from PIL import Image
-from glimpse.storage.models import Event
+from src.storage.models import Event
 
 
 class ProcessAgent(ABC):
@@ -454,7 +454,7 @@ Users extend `ProcessAgent` to build custom agents (e.g. an LLM-based summarizer
 
 ```python
 # main.py
-from glimpse.process.process_agent import ProcessAgent
+from src.process.process_agent import ProcessAgent
 
 agents: list[ProcessAgent] = [
     MyCustomAgent(),
@@ -468,7 +468,7 @@ Abstract base class for collecting additional context from external sources at c
 
 ```python
 from abc import ABC, abstractmethod
-from glimpse.storage.models import AdditionalContext
+from src.storage.models import AdditionalContext
 
 
 class ContextProvider(ABC):
@@ -518,8 +518,8 @@ Abstract base class for agents that reason over Events produced by ProcessAgents
 
 ```python
 from abc import ABC, abstractmethod
-from glimpse.storage.models import Event, Action
-from glimpse.storage.database import DatabaseManager
+from src.storage.models import Event, Action
+from src.storage.database import DatabaseManager
 
 
 class ReasoningAgent(ABC):
@@ -916,7 +916,7 @@ Wires all components and manages lifecycle:
 CLI via `argparse`:
 
 ```
-glimpse [--port 3030] [--data-dir ~/.glimpse] [--jpeg-quality 80] [--overlay-ws-url ws://localhost:9321]
+zexp [--port 3030] [--data-dir ~/.zexp] [--jpeg-quality 80] [--overlay-ws-url ws://localhost:9321]
 ```
 
 ### 15. General Agent (`general_agent/`)
@@ -948,7 +948,7 @@ When the user talks to it (via `/agent/chat`):
 
 Pluggable tools the agent can invoke during reasoning. Each tool is an async callable with a name, description, and parameter spec. Current set:
 
-- `db_query` -- FTS search across Glimpse tables (ocr, events, context, actions)
+- `db_query` -- FTS search across Z Exp tables (ocr, events, context, actions)
 - `db_raw_sql` -- raw SELECT queries against the database
 - `web_search` -- stub, ready to wire to SerpAPI/Brave Search
 - `price_lookup` -- stub, ready to wire to price comparison APIs
@@ -1065,7 +1065,7 @@ These defaults are configurable via `config.py` and CLI flags (`--retention-days
 
 ```toml
 [project]
-name = "glimpse"
+name = "zexp"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115",

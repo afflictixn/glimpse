@@ -13,7 +13,7 @@ final class ChatViewModel: ObservableObject {
     @Published var currentSuggestion: ProactiveSuggestion? = nil
     @Published var connectionStatus: ConnectionStatus = .connecting
 
-    let glimpseService = GlimpseService()
+    let zexpService = ZExpService()
     private let screenCapture = ScreenCaptureService()
     private var streamTask: Task<Void, Never>?
 
@@ -30,8 +30,8 @@ final class ChatViewModel: ObservableObject {
     func checkConnections() {
         connectionStatus = .connecting
         Task {
-            let ollama = await glimpseService.isOllamaAvailable()
-            let glimpse = await glimpseService.isGlimpseAvailable()
+            let ollama = await zexpService.isOllamaAvailable()
+            let backend = await zexpService.isBackendAvailable()
 
             if ollama {
                 connectionStatus = .connected
@@ -45,10 +45,10 @@ final class ChatViewModel: ObservableObject {
                     content: "Ollama not reachable at localhost:11434. Chat won't work until it's running."
                 ))
             }
-            if !glimpse {
+            if !backend {
                 messages.append(ChatMessage(
                     role: .system,
-                    content: "Glimpse backend not reachable at localhost:3030. Screen context unavailable."
+                    content: "Z Exp backend not reachable at localhost:3030. Screen context unavailable."
                 ))
             }
         }
@@ -73,7 +73,7 @@ final class ChatViewModel: ObservableObject {
 
         streamTask = Task {
             do {
-                let response = try await glimpseService.sendChat(message: text)
+                let response = try await zexpService.sendChat(message: text)
                 messages[assistantIdx].content = response
                 scrollAnchor = messages[assistantIdx].id
             } catch {

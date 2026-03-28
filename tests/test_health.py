@@ -323,7 +323,7 @@ class TestAPI:
         ))
         eid = await db.insert_event(fid, Event(
             agent_name="classifier", app_type=AppType.BROWSER,
-            summary="Code review session", metadata={"repo": "glimpse"},
+            summary="Code review session", metadata={"repo": "zexp"},
         ))
         await db.insert_context(fid, AdditionalContext(
             source="chrome_devtools", content_type="dom",

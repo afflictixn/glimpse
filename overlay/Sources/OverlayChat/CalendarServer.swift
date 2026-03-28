@@ -249,7 +249,7 @@ final class CalendarServer {
         return querySQLiteDB(sql)
     }
 
-    private func querySQLiteDB(_ sql: String, dbPath: String? = nil, errorHint: String = "Grant Full Disk Access to GlimpseOverlay.") -> String {
+    private func querySQLiteDB(_ sql: String, dbPath: String? = nil, errorHint: String = "Grant Full Disk Access to ZExpOverlay.") -> String {
         let path = dbPath ?? chatDBPath
         var db: OpaquePointer?
         guard sqlite3_open_v2(path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else {
@@ -314,7 +314,7 @@ final class CalendarServer {
             LIMIT \(limit)
         """
 
-        return querySQLiteDB(sql, dbPath: mailDBPath, errorHint: "Grant Full Disk Access to GlimpseOverlay for Mail access.")
+        return querySQLiteDB(sql, dbPath: mailDBPath, errorHint: "Grant Full Disk Access to ZExpOverlay for Mail access.")
     }
 
     private func handleMailSearch(_ raw: String) -> String {
@@ -346,7 +346,7 @@ final class CalendarServer {
             LIMIT \(limit)
         """
 
-        return querySQLiteDB(sql, dbPath: mailDBPath, errorHint: "Grant Full Disk Access to GlimpseOverlay for Mail access.")
+        return querySQLiteDB(sql, dbPath: mailDBPath, errorHint: "Grant Full Disk Access to ZExpOverlay for Mail access.")
     }
 
     // MARK: - Helpers

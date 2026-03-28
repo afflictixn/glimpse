@@ -35,7 +35,7 @@ struct FloatingOverlayView: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            Text("glimpse")
+            Text("z exp")
                 .font(.system(size: 11, weight: .semibold, design: .monospaced))
                 .foregroundColor(.white.opacity(0.7))
 

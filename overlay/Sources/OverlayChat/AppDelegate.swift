@@ -19,13 +19,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var chatViewModel: ChatViewModel!
     private var wsServer: WebSocketServer!
     private var calendarServer: CalendarServer!
+    private var eventMonitor: EventMonitor!
+    private var captureManager: CaptureManager!
 
     private var cancellables = Set<AnyCancellable>()
 
     // MARK: - Lifecycle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        print("[glimpse] launching...")
+        print("[zexp] launching...")
         NSApp.setActivationPolicy(.regular)
 
         // Prompt for accessibility permissions (needed for global hotkeys)
@@ -39,14 +41,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupFloatingOverlayWindow()
         setupChatPanel()
         setupStatusBar()
-        setupGlobalHotkey()
+        setupCapturePipeline()
         setupWebSocket()
         setupCalendarServer()
         bindState()
 
         // Startup demo
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
-            self?.overlayState.handleProposal(text: "glimpse is alive", importance: .medium)
+            self?.overlayState.handleProposal(text: "z is alive", importance: .medium)
         }
     }
 
@@ -56,9 +58,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let options = [kAXTrustedCheckOptionPrompt.takeRetainedValue(): true] as CFDictionary
         let trusted = AXIsProcessTrustedWithOptions(options)
         if trusted {
-            print("[glimpse] accessibility: granted")
+            print("[zexp] accessibility: granted")
         } else {
-            print("[glimpse] accessibility: not granted — macOS should be prompting now")
+            print("[zexp] accessibility: not granted — macOS should be prompting now")
         }
     }
 
@@ -286,7 +288,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
 
         if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: "glimpse")
+            button.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: "z exp")
         }
 
         let menu = NSMenu()
@@ -314,32 +316,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.menu = menu
     }
 
-    // MARK: - Global Hotkey (Cmd+Shift+O)
+    // MARK: - Capture Pipeline (replaces Python's EventTap + CaptureLoop)
 
-    private func setupGlobalHotkey() {
-        NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            self?.handleHotkeyEvent(event)
+    private func setupCapturePipeline() {
+        captureManager = CaptureManager()
+        eventMonitor = EventMonitor()
+
+        // Wire triggers → capture manager
+        eventMonitor.onTrigger = { [weak self] trigger in
+            self?.captureManager.handleTrigger(trigger)
         }
 
-        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            if self?.handleHotkeyEvent(event) == true {
-                return nil
-            }
-            return event
-        }
-    }
-
-    @discardableResult
-    private func handleHotkeyEvent(_ event: NSEvent) -> Bool {
-        let required: NSEvent.ModifierFlags = [.command, .shift]
-        guard event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(required),
-              event.keyCode == 0x1F
-        else { return false }
-
-        DispatchQueue.main.async { [weak self] in
+        // Wire hotkey (Cmd+Shift+O) → overlay toggle
+        eventMonitor.onHotkey = { [weak self] in
             self?.overlayState.toggleChat()
         }
-        return true
+
+        eventMonitor.start()
+        print("[zexp] Capture pipeline started (EventMonitor → CaptureManager → Python ingest)")
     }
 
     // MARK: - Actions
@@ -382,6 +376,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func quitApp() {
+        eventMonitor.stop()
         wsServer.stop()
         calendarServer.stop()
         NSApp.terminate(nil)

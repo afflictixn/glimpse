@@ -40,7 +40,7 @@ struct ChatView: View {
                 .fill(statusColor)
                 .frame(width: 7, height: 7)
 
-            Text("glimpse")
+            Text("z exp")
                 .font(.system(size: 13, weight: .semibold, design: .monospaced))
                 .foregroundColor(.white)
 

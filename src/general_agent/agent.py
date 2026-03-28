@@ -36,7 +36,7 @@ MAX_TOOL_ROUNDS = 10
 
 
 SYSTEM_PROMPT = """\
-You are Glimpse, a helpful assistant that watches the user's screen and \
+You are Z, a helpful assistant that watches the user's screen and \
 proactively surfaces useful information. You have access to the user's \
 screen capture history, OCR text, events, and actions stored in a local database.
 

@@ -29,6 +29,104 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+async def process_frame(
+    image: Image.Image,
+    app_name: str | None,
+    window_name: str | None,
+    trigger: str,
+    db: DatabaseManager,
+    writer: SnapshotWriter,
+    agents: list[ProcessAgent],
+    providers: list[ContextProvider],
+    intelligence: IntelligenceLayer | None = None,
+    general_agent: GeneralAgent | None = None,
+) -> int:
+    """Process a captured frame through the full pipeline.
+
+    Used by both the local CaptureLoop and the external ingest endpoint.
+    Returns the frame_id.
+    """
+    snapshot_path = await asyncio.to_thread(writer.save, image)
+
+    content_hash = hashlib.md5(
+        image.resize((image.width // 8, image.height // 8), Image.Resampling.NEAREST).tobytes()
+    ).hexdigest()
+
+    frame = Frame(
+        timestamp=datetime.now(timezone.utc).isoformat(),
+        snapshot_path=snapshot_path,
+        app_name=app_name,
+        window_name=window_name,
+        focused=True,
+        capture_trigger=trigger,
+        content_hash=content_hash,
+    )
+    frame_id = await db.insert_frame(frame)
+
+    try:
+        ocr_result = await asyncio.to_thread(perform_ocr, image)
+        await db.insert_ocr(frame_id, ocr_result)
+        ocr_text = ocr_result.text
+    except Exception:
+        logger.error("OCR failed for frame %d", frame_id, exc_info=True)
+        ocr_text = ""
+
+    agent_coros = [
+        agent.process(image, ocr_text, app_name, window_name)
+        for agent in agents
+    ]
+    provider_coros = [
+        provider.collect(app_name, window_name)
+        for provider in providers
+    ]
+
+    all_results = await asyncio.gather(
+        *agent_coros, *provider_coros, return_exceptions=True
+    )
+
+    agent_results = all_results[: len(agents)]
+    provider_results = all_results[len(agents) :]
+
+    for i, result in enumerate(agent_results):
+        if isinstance(result, BaseException):
+            logger.error(
+                "ProcessAgent %s failed: %s",
+                agents[i].name,
+                result,
+                exc_info=result,
+            )
+            continue
+        if result is not None:
+            result.frame_id = frame_id
+            await db.insert_event(frame_id, result)
+            if intelligence and result.id is not None:
+                await intelligence.submit(result)
+            if general_agent is not None:
+                await general_agent.push("event", {
+                    "frame_id": frame_id,
+                    "agent_name": result.agent_name,
+                    "app_type": result.app_type,
+                    "summary": result.summary,
+                    "metadata": result.metadata,
+                })
+
+    for i, result in enumerate(provider_results):
+        if isinstance(result, BaseException):
+            logger.error(
+                "ContextProvider %s failed: %s",
+                providers[i].name,
+                result,
+                exc_info=result,
+            )
+            continue
+        if isinstance(result, list):
+            for ctx in result:
+                ctx.frame_id = frame_id
+                await db.insert_context(frame_id, ctx)
+
+    return frame_id
+
+
 class CaptureLoop:
     def __init__(
         self,
@@ -120,83 +218,18 @@ class CaptureLoop:
         except Exception:
             logger.debug("get_focused_app failed", exc_info=True)
 
-        snapshot_path = await asyncio.to_thread(self._writer.save, image)
-
-        content_hash = hashlib.md5(
-            image.resize((image.width // 8, image.height // 8), Image.Resampling.NEAREST).tobytes()
-        ).hexdigest()
-
-        frame = Frame(
-            timestamp=datetime.now(timezone.utc).isoformat(),
-            snapshot_path=snapshot_path,
+        frame_id = await process_frame(
+            image=image,
             app_name=app_name or None,
             window_name=window_name or None,
-            focused=True,
-            capture_trigger=trigger.value,
-            content_hash=content_hash,
+            trigger=trigger.value,
+            db=self._db,
+            writer=self._writer,
+            agents=self._agents,
+            providers=self._providers,
+            intelligence=self._intelligence,
+            general_agent=self._general_agent,
         )
-        frame_id = await self._db.insert_frame(frame)
-
-        try:
-            ocr_result = await asyncio.to_thread(perform_ocr, image)
-            await self._db.insert_ocr(frame_id, ocr_result)
-            ocr_text = ocr_result.text
-        except Exception:
-            logger.error("OCR failed for frame %d", frame_id, exc_info=True)
-            ocr_text = ""
-
-        agent_coros = [
-            agent.process(image, ocr_text, app_name or None, window_name or None)
-            for agent in self._agents
-        ]
-        provider_coros = [
-            provider.collect(app_name or None, window_name or None)
-            for provider in self._providers
-        ]
-
-        all_results = await asyncio.gather(
-            *agent_coros, *provider_coros, return_exceptions=True
-        )
-
-        agent_results = all_results[: len(self._agents)]
-        provider_results = all_results[len(self._agents) :]
-
-        for i, result in enumerate(agent_results):
-            if isinstance(result, BaseException):
-                logger.error(
-                    "ProcessAgent %s failed: %s",
-                    self._agents[i].name,
-                    result,
-                    exc_info=result,
-                )
-                continue
-            if result is not None:
-                result.frame_id = frame_id
-                event_id = await self._db.insert_event(frame_id, result)
-                if self._intelligence and result.id is not None:
-                    await self._intelligence.submit(result)
-                if self._general_agent is not None:
-                    await self._general_agent.push("event", {
-                        "frame_id": frame_id,
-                        "agent_name": result.agent_name,
-                        "app_type": result.app_type,
-                        "summary": result.summary,
-                        "metadata": result.metadata,
-                    })
-
-        for i, result in enumerate(provider_results):
-            if isinstance(result, BaseException):
-                logger.error(
-                    "ContextProvider %s failed: %s",
-                    self._providers[i].name,
-                    result,
-                    exc_info=result,
-                )
-                continue
-            if isinstance(result, list):
-                for ctx in result:
-                    ctx.frame_id = frame_id
-                    await self._db.insert_context(frame_id, ctx)
 
         self._capture_count += 1
         logger.debug(

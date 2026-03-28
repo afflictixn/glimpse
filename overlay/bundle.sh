@@ -1,11 +1,11 @@
 #!/bin/bash
-# Build GlimpseOverlay and wrap it as a proper macOS .app bundle
+# Build ZExpOverlay and wrap it as a proper macOS .app bundle
 # so it can request TCC permissions (Calendar, Contacts, etc.)
 
 set -e
 cd "$(dirname "$0")"
 
-APP_NAME="GlimpseOverlay"
+APP_NAME="ZExpOverlay"
 APP_DIR=".build/${APP_NAME}.app"
 CONTENTS="${APP_DIR}/Contents"
 MACOS="${CONTENTS}/MacOS"
@@ -27,11 +27,11 @@ cat > "${CONTENTS}/Info.plist" << 'PLIST'
 <plist version="1.0">
 <dict>
     <key>CFBundleIdentifier</key>
-    <string>com.glimpse.overlay</string>
+    <string>com.zexp.overlay</string>
     <key>CFBundleName</key>
-    <string>GlimpseOverlay</string>
+    <string>ZExpOverlay</string>
     <key>CFBundleExecutable</key>
-    <string>GlimpseOverlay</string>
+    <string>ZExpOverlay</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleVersion</key>
@@ -41,11 +41,11 @@ cat > "${CONTENTS}/Info.plist" << 'PLIST'
     <key>LSUIElement</key>
     <true/>
     <key>NSCalendarsUsageDescription</key>
-    <string>Glimpse needs calendar access to show your upcoming events and detect scheduling conflicts.</string>
+    <string>Z Exp needs calendar access to show your upcoming events and detect scheduling conflicts.</string>
     <key>NSContactsUsageDescription</key>
-    <string>Glimpse needs contacts access to help you prepare for meetings and remember people.</string>
+    <string>Z Exp needs contacts access to help you prepare for meetings and remember people.</string>
     <key>NSCalendarsFullAccessUsageDescription</key>
-    <string>Glimpse needs full calendar access to show your upcoming events and detect scheduling conflicts.</string>
+    <string>Z Exp needs full calendar access to show your upcoming events and detect scheduling conflicts.</string>
 </dict>
 </plist>
 PLIST

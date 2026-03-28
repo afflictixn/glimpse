@@ -12,7 +12,7 @@ load_dotenv()
 @dataclass
 class Settings:
     port: int = 3030
-    data_dir: Path = field(default_factory=lambda: Path.home() / ".glimpse")
+    data_dir: Path = field(default_factory=lambda: Path.home() / ".zexp")
     jpeg_quality: int = 80
 
     # Capture timing
@@ -52,7 +52,7 @@ class Settings:
 
     @property
     def db_path(self) -> Path:
-        return self.data_dir / "glimpse.db"
+        return self.data_dir / "zexp.db"
 
     @property
     def snapshots_dir(self) -> Path:

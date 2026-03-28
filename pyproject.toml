@@ -1,10 +1,11 @@
 [project]
-name = "glimpse"
+name = "zexp"
 version = "0.1.0"
 description = "macOS screenshot capture, OCR, and intelligence layer with REST API"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115",
+    "python-multipart>=0.0.20",
     "uvicorn[standard]>=0.34",
     "pillow>=11.0",
     "numpy>=2.0",
@@ -24,7 +25,7 @@ dependencies = [
 ]
 
 [project.scripts]
-glimpse = "glimpse.main:main"
+zexp = "src.main:main"
 
 [build-system]
 requires = ["setuptools>=75.0"]

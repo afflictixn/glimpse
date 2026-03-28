@@ -31,14 +31,14 @@ class ToolRegistry:
         self._tools: dict[str, RegisteredTool] = {}
         self._register_builtins()
 
-    _REDDIT_HEADERS = {"User-Agent": "Glimpse/1.0"}
+    _REDDIT_HEADERS = {"User-Agent": "ZExp/1.0"}
 
     def _register_builtins(self) -> None:
         self.register(RegisteredTool(
             spec=ToolSpec(
                 name="db_query",
                 description=(
-                    "Query the Glimpse database. Supports full-text search across OCR text, "
+                    "Query the Z Exp database. Supports full-text search across OCR text, "
                     "events, context, and actions. Use this to look up what the user was doing, "
                     "find past screen content, or check event/action history."
                 ),
@@ -54,7 +54,7 @@ class ToolRegistry:
             spec=ToolSpec(
                 name="db_raw_sql",
                 description=(
-                    "Execute a read-only SELECT query against the Glimpse SQLite database. "
+                    "Execute a read-only SELECT query against the Z Exp SQLite database. "
                     "Only SELECT statements are allowed. "
                     "Schema: "
                     "frames(id, timestamp, snapshot_path, app_name, window_name, focused, capture_trigger, content_hash) | "
@@ -109,7 +109,7 @@ class ToolRegistry:
             spec=ToolSpec(
                 name="contact_lookup",
                 description=(
-                    "Look up context about a person from Glimpse event history — "
+                    "Look up context about a person from Z Exp event history — "
                     "recent interactions, mentions, social context gathered from screen captures."
                 ),
                 parameters={"name": "Person's name to search for"},
@@ -491,7 +491,7 @@ class ToolRegistry:
         except Exception as e:
             logger.error("calendar_events failed: %s", e)
             return json.dumps({
-                "error": f"Calendar unavailable. Make sure the Glimpse overlay is running. ({e})"
+                "error": f"Calendar unavailable. Make sure the Z Exp overlay is running. ({e})"
             })
 
     async def _memory_store(
@@ -644,7 +644,7 @@ class ToolRegistry:
                 return resp.text
         except Exception as e:
             logger.error("mail_recent failed: %s", e)
-            return json.dumps({"error": f"Mail unavailable. Make sure the Glimpse overlay is running. ({e})"})
+            return json.dumps({"error": f"Mail unavailable. Make sure the Z Exp overlay is running. ({e})"})
 
     async def _mail_search(self, query: str = "", limit: str = "20") -> str:
         import httpx
@@ -791,7 +791,7 @@ class ToolRegistry:
                 return resp.text
         except Exception as e:
             logger.error("imessage_recent failed: %s", e)
-            return json.dumps({"error": f"iMessage unavailable. Make sure the Glimpse overlay is running. ({e})"})
+            return json.dumps({"error": f"iMessage unavailable. Make sure the Z Exp overlay is running. ({e})"})
 
     async def _imessage_search(self, query: str = "", limit: str = "20") -> str:
         import httpx
