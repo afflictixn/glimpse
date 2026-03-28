@@ -18,6 +18,9 @@ venv/
 .env.*
 !.env.example
 
+# Benchmark artifacts
+benchmarks/output/
+
 # OS / IDE
 .DS_Store
 .idea/
