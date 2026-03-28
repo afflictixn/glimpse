@@ -10,7 +10,8 @@ let package = Package(
             path: "Sources/OverlayChat",
             linkerSettings: [
                 .linkedFramework("Carbon"),
-                .linkedFramework("Network")
+                .linkedFramework("Network"),
+                .linkedFramework("EventKit")
             ]
         )
     ]

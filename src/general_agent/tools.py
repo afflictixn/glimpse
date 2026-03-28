@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 import logging
-import urllib.parse
 from dataclasses import dataclass, field
 from typing import Any, Callable, Awaitable
 
@@ -71,10 +70,21 @@ class ToolRegistry:
             fn=self._web_search,
         ))
         self.register(ToolSpec(
+            name="fetch_url",
+            description=(
+                "Fetch and extract text content from a URL. Use to read page content "
+                "the user is viewing — terms of service, product listings, articles, etc."
+            ),
+            parameters={
+                "url": "The URL to fetch",
+            },
+            fn=self._fetch_url,
+        ))
+        self.register(ToolSpec(
             name="price_lookup",
             description=(
                 "Look up current prices for a product across sources. "
-                "Returns price comparisons when available."
+                "Searches the web with price-focused queries and returns comparisons."
             ),
             parameters={
                 "product": "Product name or description to look up",
@@ -91,6 +101,93 @@ class ToolRegistry:
                 "name": "Person's name to search for",
             },
             fn=self._contact_lookup,
+        ))
+        self.register(ToolSpec(
+            name="contacts_search",
+            description=(
+                "Search macOS Contacts for a person. Returns name, emails, phones, "
+                "and birthday if available. Requires Contacts permission on macOS."
+            ),
+            parameters={
+                "name": "Person's name to search for",
+            },
+            fn=self._contacts_search,
+        ))
+        self.register(ToolSpec(
+            name="calendar_events",
+            description=(
+                "Fetch upcoming calendar events from macOS Calendar. "
+                "Use to check for scheduling conflicts, upcoming meetings, etc."
+            ),
+            parameters={
+                "days_ahead": "Number of days to look ahead (default 7)",
+            },
+            fn=self._calendar_events,
+        ))
+        self.register(ToolSpec(
+            name="memory_store",
+            description=(
+                "Store a fact about an entity (person, product, price, pattern, preference) "
+                "for long-term recall. Use to remember user habits, prices seen, people met, etc."
+            ),
+            parameters={
+                "entity_type": "One of: person, product, price, pattern, preference",
+                "entity_name": "Name of the entity (e.g. person name, product name)",
+                "fact": "The fact to remember",
+                "source": "Where this fact came from (optional)",
+            },
+            fn=self._memory_store,
+        ))
+        self.register(ToolSpec(
+            name="memory_query",
+            description=(
+                "Search stored memories about entities. Use to recall user habits, "
+                "past prices, people context, product history, etc."
+            ),
+            parameters={
+                "query": "Search query for memories",
+                "entity_type": "Filter by type: person, product, price, pattern, preference (optional)",
+                "limit": "Max results (default 10)",
+            },
+            fn=self._memory_query,
+        ))
+        self.register(ToolSpec(
+            name="social_profile",
+            description=(
+                "Look up a social media profile by handle. Returns display name, bio, "
+                "follower/following counts, and post count. Currently uses Bluesky — "
+                "pass handles like 'jay.bsky.social'."
+            ),
+            parameters={
+                "handle": "Social media handle (e.g. 'jay.bsky.social')",
+            },
+            fn=self._social_profile,
+        ))
+        self.register(ToolSpec(
+            name="social_feed",
+            description=(
+                "Get recent posts from a social media profile. Returns their latest posts "
+                "with text, timestamps, and engagement counts."
+            ),
+            parameters={
+                "handle": "Social media handle (e.g. 'jay.bsky.social')",
+                "limit": "Max posts to return (default 10)",
+            },
+            fn=self._social_feed,
+        ))
+        self.register(ToolSpec(
+            name="social_search",
+            description=(
+                "Search social media posts by keyword. Returns matching posts with author, "
+                "text, timestamps, and engagement. Use for trending topics, fact checking, "
+                "or finding what people are saying about something."
+            ),
+            parameters={
+                "query": "Search query string",
+                "limit": "Max posts to return (default 10)",
+                "sort": "Sort by: 'top' or 'latest' (default 'latest')",
+            },
+            fn=self._social_search,
         ))
 
     def register(self, spec: ToolSpec) -> None:
@@ -110,14 +207,14 @@ class ToolRegistry:
             for t in self._tools.values()
         ]
 
-    async def call(self, name: str, **kwargs: Any) -> str:
-        spec = self._tools.get(name)
+    async def call(self, tool_name: str, **kwargs: Any) -> str:
+        spec = self._tools.get(tool_name)
         if spec is None:
-            return json.dumps({"error": f"Unknown tool: {name}"})
+            return json.dumps({"error": f"Unknown tool: {tool_name}"})
         try:
             return await spec.fn(**kwargs)
         except Exception as e:
-            logger.error("Tool %s failed: %s", name, e, exc_info=True)
+            logger.error("Tool %s failed: %s", tool_name, e, exc_info=True)
             return json.dumps({"error": str(e)})
 
     # ── Built-in tool implementations ──────────────────────────
@@ -141,20 +238,39 @@ class ToolRegistry:
         return json.dumps(rows, default=str)
 
     async def _web_search(self, query: str = "") -> str:
-        # Stub — in production, wire to a real search API (SerpAPI, Brave, etc.)
+        from duckduckgo_search import DDGS
+
         logger.info("web_search called: %s", query)
-        return json.dumps({
-            "note": "Web search not yet connected to a provider. Wire a search API (SerpAPI, Brave Search, etc.) here.",
-            "query": query,
-        })
+        try:
+            with DDGS() as ddgs:
+                results = list(ddgs.text(query, max_results=5))
+            return json.dumps(results, default=str)
+        except Exception as e:
+            logger.error("Web search failed: %s", e)
+            return json.dumps({"error": f"Web search failed: {e}"})
+
+    async def _fetch_url(self, url: str = "") -> str:
+        import httpx
+        from bs4 import BeautifulSoup
+
+        logger.info("fetch_url called: %s", url)
+        try:
+            async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+                resp = await client.get(url)
+                resp.raise_for_status()
+            soup = BeautifulSoup(resp.text, "html.parser")
+            for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
+                tag.decompose()
+            text = soup.get_text(separator="\n", strip=True)[:5000]
+            title = soup.title.string.strip() if soup.title and soup.title.string else ""
+            return json.dumps({"url": url, "title": title, "content": text})
+        except Exception as e:
+            logger.error("fetch_url failed: %s", e)
+            return json.dumps({"error": f"Failed to fetch URL: {e}"})
 
     async def _price_lookup(self, product: str = "") -> str:
-        # Stub — in production, wire to price comparison APIs
         logger.info("price_lookup called: %s", product)
-        return json.dumps({
-            "note": "Price lookup not yet connected to a provider.",
-            "product": product,
-        })
+        return await self._web_search(query=f"{product} price buy compare")
 
     async def _contact_lookup(self, name: str = "") -> str:
         # Search across OCR text and events for mentions of this person
@@ -164,3 +280,207 @@ class ToolRegistry:
             "ocr_mentions": ocr_hits,
             "event_mentions": event_hits,
         }, default=str)
+
+    async def _contacts_search(self, name: str = "") -> str:
+        logger.info("contacts_search called: %s", name)
+        try:
+            import Contacts as CNContacts
+
+            store = CNContacts.CNContactStore.alloc().init()
+            predicate = CNContacts.CNContact.predicateForContactsMatchingName_(name)
+            keys = [
+                CNContacts.CNContactGivenNameKey,
+                CNContacts.CNContactFamilyNameKey,
+                CNContacts.CNContactEmailAddressesKey,
+                CNContacts.CNContactPhoneNumbersKey,
+                CNContacts.CNContactBirthdayKey,
+                CNContacts.CNContactOrganizationNameKey,
+                CNContacts.CNContactJobTitleKey,
+            ]
+            contacts, error = store.unifiedContactsMatchingPredicate_keysToFetch_error_(
+                predicate, keys, None,
+            )
+            if error:
+                return json.dumps({"error": str(error)})
+
+            results = []
+            for c in (contacts or [])[:10]:
+                entry: dict[str, Any] = {
+                    "given_name": c.givenName(),
+                    "family_name": c.familyName(),
+                    "organization": c.organizationName() or None,
+                    "job_title": c.jobTitle() or None,
+                }
+                emails = c.emailAddresses()
+                if emails:
+                    entry["emails"] = [e.value() for e in emails]
+                phones = c.phoneNumbers()
+                if phones:
+                    entry["phones"] = [p.value().stringValue() for p in phones]
+                bday = c.birthday()
+                if bday:
+                    entry["birthday"] = f"{bday.month()}-{bday.day()}"
+                results.append(entry)
+
+            return json.dumps(results, default=str)
+        except ImportError:
+            return json.dumps({"error": "macOS Contacts framework not available"})
+        except Exception as e:
+            logger.error("contacts_search failed: %s", e)
+            return json.dumps({"error": f"Contacts search failed: {e}"})
+
+    async def _calendar_events(self, days_ahead: str = "7") -> str:
+        """Fetch calendar events via the overlay's CalendarServer (port 9322).
+
+        The Swift overlay has EventKit permission (as a bundled .app) and exposes
+        calendar data over a local HTTP endpoint.
+        """
+        import httpx
+
+        logger.info("calendar_events called: days_ahead=%s", days_ahead)
+        n_days = min(int(days_ahead), 30)
+        try:
+            async with httpx.AsyncClient(timeout=5) as client:
+                resp = await client.get(
+                    f"http://localhost:9322/calendar?days={n_days}",
+                )
+                return resp.text
+        except Exception as e:
+            logger.error("calendar_events failed: %s", e)
+            return json.dumps({
+                "error": f"Calendar unavailable. Make sure the Glimpse overlay is running. ({e})"
+            })
+
+    async def _memory_store(
+        self,
+        entity_type: str = "preference",
+        entity_name: str = "",
+        fact: str = "",
+        source: str = "",
+    ) -> str:
+        logger.info("memory_store: %s/%s", entity_type, entity_name)
+        valid_types = {"person", "product", "price", "pattern", "preference"}
+        if entity_type not in valid_types:
+            return json.dumps({"error": f"Invalid entity_type. Use one of: {', '.join(sorted(valid_types))}"})
+        if not entity_name or not fact:
+            return json.dumps({"error": "entity_name and fact are required"})
+
+        row_id = await self._db.insert_memory(
+            entity_type=entity_type,
+            entity_name=entity_name,
+            fact=fact,
+            source=source or None,
+        )
+        return json.dumps({"stored": True, "memory_id": row_id})
+
+    async def _memory_query(
+        self,
+        query: str = "",
+        entity_type: str = "",
+        limit: str = "10",
+    ) -> str:
+        n = min(int(limit), 50)
+        rows = await self._db.search_memory(
+            query=query,
+            entity_type=entity_type or None,
+            limit=n,
+        )
+        return json.dumps(rows, default=str)
+
+    # ── Social media (Bluesky / AT Protocol) ──────────────────
+    # Swap this base URL + response parsing to support Twitter/X later.
+
+    _BSKY_BASE = "https://public.api.bsky.app/xrpc"
+
+    async def _social_profile(self, handle: str = "") -> str:
+        import httpx
+
+        logger.info("social_profile called: %s", handle)
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(
+                    f"{self._BSKY_BASE}/app.bsky.actor.getProfile",
+                    params={"actor": handle},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+            return json.dumps({
+                "handle": data.get("handle", ""),
+                "display_name": data.get("displayName", ""),
+                "bio": data.get("description", ""),
+                "followers": data.get("followersCount", 0),
+                "following": data.get("followsCount", 0),
+                "posts": data.get("postsCount", 0),
+                "avatar": data.get("avatar", ""),
+            })
+        except Exception as e:
+            logger.error("social_profile failed: %s", e)
+            return json.dumps({"error": f"Profile lookup failed: {e}"})
+
+    async def _social_feed(self, handle: str = "", limit: str = "10") -> str:
+        import httpx
+
+        logger.info("social_feed called: %s limit=%s", handle, limit)
+        n = min(int(limit), 50)
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(
+                    f"{self._BSKY_BASE}/app.bsky.feed.getAuthorFeed",
+                    params={"actor": handle, "limit": n, "filter": "posts_no_replies"},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+
+            posts = []
+            for item in data.get("feed", []):
+                post = item.get("post", {})
+                record = post.get("record", {})
+                posts.append({
+                    "text": record.get("text", ""),
+                    "created_at": record.get("createdAt", ""),
+                    "likes": post.get("likeCount", 0),
+                    "reposts": post.get("repostCount", 0),
+                    "replies": post.get("replyCount", 0),
+                })
+            return json.dumps(posts, default=str)
+        except Exception as e:
+            logger.error("social_feed failed: %s", e)
+            return json.dumps({"error": f"Feed lookup failed: {e}"})
+
+    async def _social_search(self, query: str = "", limit: str = "10", sort: str = "latest") -> str:
+        import httpx
+
+        logger.info("social_search called: q=%s limit=%s sort=%s", query, limit, sort)
+        n = min(int(limit), 50)
+        if sort not in ("top", "latest"):
+            sort = "latest"
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(
+                    f"{self._BSKY_BASE}/app.bsky.feed.searchPosts",
+                    params={"q": query, "limit": n, "sort": sort},
+                )
+                # Search may require auth — fall back to web search
+                if resp.status_code == 403:
+                    logger.info("Bluesky search requires auth, falling back to web_search")
+                    return await self._web_search(query=f"site:bsky.app {query}")
+                resp.raise_for_status()
+                data = resp.json()
+
+            posts = []
+            for post in data.get("posts", []):
+                author = post.get("author", {})
+                record = post.get("record", {})
+                posts.append({
+                    "author": author.get("handle", ""),
+                    "author_name": author.get("displayName", ""),
+                    "text": record.get("text", ""),
+                    "created_at": record.get("createdAt", ""),
+                    "likes": post.get("likeCount", 0),
+                    "reposts": post.get("repostCount", 0),
+                    "replies": post.get("replyCount", 0),
+                })
+            return json.dumps(posts, default=str)
+        except Exception as e:
+            logger.error("social_search failed: %s", e)
+            return json.dumps({"error": f"Social search failed: {e}"})

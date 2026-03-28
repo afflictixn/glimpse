@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var viewModel: ChatViewModel!
     private var wsServer: WebSocketServer!
+    private var calendarServer: CalendarServer!
 
     // MARK: - Lifecycle
 
@@ -24,6 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupStatusBar()
         setupGlobalHotkey()
         setupWebSocket()
+        setupCalendarServer()
     }
 
     // MARK: - Floating Panel
@@ -136,8 +138,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    // MARK: - Calendar Server
+
+    private func setupCalendarServer() {
+        calendarServer = CalendarServer()
+        calendarServer.start()
+    }
+
     @objc private func quitApp() {
         wsServer.stop()
+        calendarServer.stop()
         NSApp.terminate(nil)
     }
 }

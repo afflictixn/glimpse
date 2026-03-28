@@ -3,7 +3,7 @@
 The agent runs as a continuous asyncio.Task:
 1. Consumes items from the processing queue (events + actions pushed via /push)
 2. Evaluates each against current context (recent events, conversation history, user prefs)
-3. Calls tools to gather more info if needed
+3. Calls tools to gather more info if needed (via Ollama LLM with native tool-calling)
 4. Formulates a response and pushes to the overlay UI via WebSocket
 """
 from __future__ import annotations
@@ -16,6 +16,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
+from src.general_agent.ollama_client import OllamaChat, tool_spec_to_ollama, sanitize_response
 from src.general_agent.tools import ToolRegistry
 from src.storage.database import DatabaseManager
 
@@ -27,6 +28,24 @@ MAX_CONVERSATION_TURNS = 30
 
 # Suppress duplicate notifications within this window (seconds)
 DEDUP_WINDOW_S = 30.0
+
+def _build_system_prompt() -> str:
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).strftime("%A, %B %d, %Y, %H:%M UTC")
+    return (
+        f"You are Glimpse, a proactive macOS assistant that watches the user's "
+        f"screen and helps them in real time.\n\n"
+        f"Current date and time: {now}\n\n"
+        f"RULES:\n"
+        f"- NEVER guess or hallucinate facts. If you don't know, use a tool.\n"
+        f"- For weather, prices, current events, dates, or any real-world info: "
+        f"ALWAYS call web_search first. Do NOT answer from memory.\n"
+        f"- Be concise. One or two sentences max.\n"
+        f"- No emojis. No markdown. Plain text only.\n"
+        f"- Never output model artifacts like <start_of_image>, <end_of_turn>, etc.\n"
+        f"- When you use a tool, incorporate the result naturally into your answer.\n"
+        f"- Think like a sharp friend looking over their shoulder — helpful, direct, no fluff."
+    )
 
 
 @dataclass
@@ -52,10 +71,23 @@ class GeneralAgent:
         db: DatabaseManager,
         tools: ToolRegistry,
         overlay_ws_url: str = "ws://localhost:9321",
+        ollama_base_url: str = "http://localhost:11434",
+        ollama_model: str = "gemma3:12b",
     ) -> None:
         self._db = db
         self._tools = tools
         self._overlay_ws_url = overlay_ws_url
+
+        self._llm = OllamaChat(
+            base_url=ollama_base_url,
+            model=ollama_model,
+        )
+
+        # Build Ollama tool definitions from the registry
+        self._ollama_tools = [
+            tool_spec_to_ollama(s["name"], s["description"], s["parameters"])
+            for s in tools.list_specs()
+        ]
 
         # Processing queue — events and actions arrive here via /push
         self._queue: asyncio.Queue[PushItem] = asyncio.Queue()
@@ -87,17 +119,10 @@ class GeneralAgent:
         # Build context for the response
         context = self._build_context()
 
-        # Simple tool-augmented response loop
-        response = await self._generate_response(user_message, context)
+        # LLM-driven tool-augmented response
+        response = sanitize_response(await self._generate_response(user_message, context))
 
         self._conversation.append(ConversationTurn(role="assistant", text=response))
-
-        # Push the conversation to the overlay
-        await self._ws_send({
-            "type": "append_conversation",
-            "role": "assistant",
-            "text": response,
-        })
 
         return response
 
@@ -159,7 +184,7 @@ class GeneralAgent:
             logger.debug("Skipping low-importance item: %s", summary[:80])
             return
 
-        # For high-importance items, optionally use tools to enrich
+        # For high-importance items, use LLM with tools to enrich
         enrichment = ""
         if importance >= 0.7:
             enrichment = await self._enrich(item)
@@ -215,31 +240,35 @@ class GeneralAgent:
         return min(score, 1.0)
 
     async def _enrich(self, item: PushItem) -> str:
-        """Use tools to gather additional context for a high-importance item."""
+        """Use LLM + tools to gather additional context for a high-importance item."""
         data = item.data
         summary = data.get("summary", "") or data.get("action_description", "")
 
-        # Pull recent related context from the DB
-        try:
-            result = await self._tools.call(
-                "db_query",
-                table="events",
-                query=summary[:100],
-                limit="3",
-            )
-            parsed = json.loads(result)
-            if parsed:
-                return f"Related history: {json.dumps(parsed[:2], default=str)}"
-        except Exception:
-            logger.debug("Enrichment failed", exc_info=True)
+        messages = [
+            {"role": "system", "content": _build_system_prompt()},
+            {"role": "user", "content": (
+                f"The user's screen just showed something important. "
+                f"Here's what was detected:\n\n{summary}\n\n"
+                f"Use your tools to gather any useful context, then write a short, "
+                f"helpful one-liner to surface to the user."
+            )},
+        ]
 
-        return ""
+        try:
+            result = await self._llm.chat_with_tools(
+                messages=messages,
+                tools=self._ollama_tools,
+                tool_executor=self._tools.call,
+            )
+            return result.strip()
+        except Exception:
+            logger.error("LLM enrichment failed", exc_info=True)
+            return ""
 
     def _format_notification(self, item: PushItem, summary: str, enrichment: str) -> str:
-        parts = [summary]
         if enrichment:
-            parts.append(f"\n\n{enrichment}")
-        return "\n".join(parts)
+            return enrichment
+        return summary
 
     # ── Conversation / response generation ─────────────────────
 
@@ -255,76 +284,54 @@ class GeneralAgent:
                 if summary:
                     parts.append(f"  [{item.kind}] {summary[:200]}")
 
-        # Recent conversation
-        if self._conversation:
-            parts.append("\nConversation history:")
-            for turn in list(self._conversation)[-10:]:
-                parts.append(f"  {turn.role}: {turn.text[:300]}")
-
         return "\n".join(parts)
 
-    async def _generate_response(self, user_message: str, context: str) -> str:
-        """Generate a response to the user's message.
-
-        Currently uses a tool-augmented direct approach.
-        In production, wire this to an LLM (local or API) for natural conversation.
-        """
+    def _needs_tools(self, user_message: str) -> bool:
+        """Quick heuristic: does this message likely need tool use?"""
         lower = user_message.lower()
+        tool_signals = [
+            "search", "look up", "find", "price", "cost", "how much", "cheaper",
+            "calendar", "schedule", "event", "meeting", "appointment",
+            "remember", "memory", "recall", "contact", "who is",
+            "what is", "weather", "news", "check", "compare",
+            "history", "recent", "screen", "browse", "web",
+            "social", "profile", "feed", "post", "tweet", "bluesky", "bsky",
+            "followers", "following", "trending",
+        ]
+        return any(kw in lower for kw in tool_signals)
 
-        # Tool dispatch based on user intent
-        if any(kw in lower for kw in ["search", "look up", "find", "what is", "who is"]):
-            query = user_message
-            # Try DB first
-            db_result = await self._tools.call("db_query", table="ocr", query=query, limit="5")
-            parsed = json.loads(db_result)
-            if parsed:
-                return f"Here's what I found in your screen history:\n\n{self._format_search_results(parsed)}"
+    async def _generate_response(self, user_message: str, context: str) -> str:
+        """Generate a response — fast path for simple chat, tool loop for complex queries."""
+        messages: list[dict[str, str]] = [
+            {"role": "system", "content": _build_system_prompt()},
+        ]
 
-            # Fall back to web search
-            web_result = await self._tools.call("web_search", query=query)
-            return f"Web search result:\n\n{web_result}"
+        # Include screen context if available
+        if context:
+            messages.append({
+                "role": "system",
+                "content": f"Current context:\n{context}",
+            })
 
-        if any(kw in lower for kw in ["price", "cost", "how much", "cheaper"]):
-            product = user_message
-            result = await self._tools.call("price_lookup", product=product)
-            return f"Price lookup:\n\n{result}"
+        # Include recent conversation history
+        for turn in list(self._conversation)[-10:]:
+            messages.append({"role": turn.role, "content": turn.text})
 
-        if any(kw in lower for kw in ["recent", "what was i doing", "history", "activity"]):
-            result = await self._tools.call("db_query", table="events", query="", limit="10")
-            parsed = json.loads(result)
-            if parsed:
-                return f"Your recent activity:\n\n{self._format_search_results(parsed)}"
-            return "No recent activity found."
-
-        # Default: provide context-aware response
-        if self._recent_items:
-            recent_summary = self._extract_summary(self._recent_items[-1])
-            return (
-                f"I'm watching your screen and here to help. "
-                f"Most recently I saw: {recent_summary[:200]}\n\n"
-                f"You can ask me to search your history, look things up, "
-                f"or I'll proactively suggest things when I notice something useful."
-            )
-
-        return (
-            "I'm here and watching. Nothing notable yet. "
-            "Ask me anything or I'll chime in when I spot something useful."
-        )
-
-    def _format_search_results(self, results: list[dict]) -> str:
-        lines = []
-        for r in results[:5]:
-            # Adapt to whichever result shape we get
-            text = r.get("text") or r.get("summary") or r.get("action_description") or str(r)
-            app = r.get("app_name", "")
-            ts = r.get("timestamp", "")
-            line = f"• {text[:150]}"
-            if app:
-                line += f" ({app})"
-            if ts:
-                line += f" [{ts}]"
-            lines.append(line)
-        return "\n".join(lines)
+        try:
+            if self._needs_tools(user_message):
+                # Full tool-calling loop with all tools
+                result = await self._llm.chat_with_tools(
+                    messages=messages,
+                    tools=self._ollama_tools,
+                    tool_executor=self._tools.call,
+                )
+            else:
+                # Fast path — direct chat, no tool injection
+                result = await self._llm.chat(messages)
+            return result.strip() or "I couldn't generate a response. Try asking differently."
+        except Exception:
+            logger.error("LLM response generation failed", exc_info=True)
+            return "Sorry, I'm having trouble connecting to the language model right now."
 
     # ── WebSocket to overlay ───────────────────────────────────
 

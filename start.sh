@@ -28,7 +28,7 @@ if curl -s http://localhost:11434/api/tags > /dev/null 2>&1; then
     echo -e "  ${GREEN}✓${NC} Ollama already running"
 else
     echo -e "  ${YELLOW}→${NC} Starting Ollama..."
-    GGML_METAL_TENSOR_DISABLE=1 ollama serve > /dev/null 2>&1 &
+    ollama serve > /dev/null 2>&1 &
     sleep 3
     if curl -s http://localhost:11434/api/tags > /dev/null 2>&1; then
         echo -e "  ${GREEN}✓${NC} Ollama started"
@@ -37,34 +37,35 @@ else
     fi
 fi
 
-# 2. Python backend
-if curl -s http://localhost:3030/health > /dev/null 2>&1; then
-    echo -e "  ${GREEN}✓${NC} Glimpse backend already running"
-else
-    echo -e "  ${YELLOW}→${NC} Starting Glimpse backend..."
-    source venv/bin/activate 2>/dev/null || true
-    GGML_METAL_TENSOR_DISABLE=1 python -m src.main --port 3030 > /tmp/glimpse-backend.log 2>&1 &
-    sleep 2
-    if curl -s http://localhost:3030/health > /dev/null 2>&1; then
-        echo -e "  ${GREEN}✓${NC} Glimpse backend started (port 3030)"
-    else
-        echo -e "  ${YELLOW}~${NC} Glimpse backend starting... (check /tmp/glimpse-backend.log)"
-    fi
-fi
-
-# 3. Swift overlay
+# 2. Swift overlay (bundled .app for macOS permissions)
 if pgrep -f GlimpseOverlay > /dev/null 2>&1; then
     echo -e "  ${GREEN}✓${NC} Overlay already running"
 else
     echo -e "  ${YELLOW}→${NC} Building & starting overlay..."
     cd overlay
-    swift run GlimpseOverlay > /tmp/glimpse-overlay.log 2>&1 &
+    bash bundle.sh > /tmp/glimpse-overlay-build.log 2>&1
+    open .build/GlimpseOverlay.app > /tmp/glimpse-overlay.log 2>&1
     cd ..
     sleep 3
     if pgrep -f GlimpseOverlay > /dev/null 2>&1; then
         echo -e "  ${GREEN}✓${NC} Overlay started (Cmd+Shift+O to toggle)"
     else
         echo -e "  ${RED}✗${NC} Overlay failed (check /tmp/glimpse-overlay.log)"
+    fi
+fi
+
+# 3. Python backend
+if curl -s http://localhost:3030/health > /dev/null 2>&1; then
+    echo -e "  ${GREEN}✓${NC} Glimpse backend already running"
+else
+    echo -e "  ${YELLOW}→${NC} Starting Glimpse backend..."
+    source .venv/bin/activate 2>/dev/null || true
+    python -m src.main --port 3030 > /tmp/glimpse-backend.log 2>&1 &
+    sleep 2
+    if curl -s http://localhost:3030/health > /dev/null 2>&1; then
+        echo -e "  ${GREEN}✓${NC} Glimpse backend started (port 3030)"
+    else
+        echo -e "  ${YELLOW}~${NC} Glimpse backend starting... (check /tmp/glimpse-backend.log)"
     fi
 fi
 

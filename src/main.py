@@ -81,6 +81,8 @@ async def run(settings: Settings) -> None:
         db=db,
         tools=tool_registry,
         overlay_ws_url=settings.overlay_ws_url,
+        ollama_base_url=settings.ollama_base_url,
+        ollama_model=settings.ollama_model,
     )
 
     intelligence = IntelligenceLayer(agents=reasoning_agents, db=db, general_agent=general_agent)

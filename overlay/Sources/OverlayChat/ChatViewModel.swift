@@ -72,20 +72,10 @@ final class ChatViewModel: ObservableObject {
         isStreaming = true
 
         streamTask = Task {
-            // Fetch recent screen context from Glimpse backend
-            let context = await glimpseService.buildContextSummary()
-
-            let stream = glimpseService.streamChat(
-                messages: messages.filter { $0.role != .system && !$0.content.isEmpty },
-                contextSummary: context
-            )
-
             do {
-                for try await chunk in stream {
-                    if Task.isCancelled { break }
-                    messages[assistantIdx].content.append(chunk)
-                    scrollAnchor = messages[assistantIdx].id
-                }
+                let response = try await glimpseService.sendChat(message: text)
+                messages[assistantIdx].content = response
+                scrollAnchor = messages[assistantIdx].id
             } catch {
                 if messages[assistantIdx].content.isEmpty {
                     messages[assistantIdx].content = "Error: \(error.localizedDescription)"

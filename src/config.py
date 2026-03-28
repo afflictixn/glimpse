@@ -27,7 +27,7 @@ class Settings:
 
     # Ollama / Gemma agent
     ollama_base_url: str = "http://localhost:11434"
-    ollama_model: str = "gemma3:12b"
+    ollama_model: str = "gemma3:1b"
     include_ocr: bool = False
     ollama_timeout_s: int = 30
 
