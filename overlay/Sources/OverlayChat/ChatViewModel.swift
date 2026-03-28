@@ -30,14 +30,22 @@ final class ChatViewModel: ObservableObject {
     func checkConnections() {
         connectionStatus = .connecting
         Task {
-            let ollama = await zexpService.isOllamaAvailable()
-            let backend = await zexpService.isBackendAvailable()
+            var ollama = false
+            var backend = false
+            let maxAttempts = 5
+            let retryDelay: UInt64 = 2_000_000_000
 
-            if ollama {
-                connectionStatus = .connected
-            } else {
-                connectionStatus = .disconnected
+            for attempt in 1...maxAttempts {
+                ollama = await zexpService.isOllamaAvailable()
+                backend = await zexpService.isBackendAvailable()
+
+                if ollama && backend { break }
+                if attempt < maxAttempts {
+                    try? await Task.sleep(nanoseconds: retryDelay)
+                }
             }
+
+            connectionStatus = ollama ? .connected : .disconnected
 
             if !ollama {
                 messages.append(ChatMessage(
