@@ -442,7 +442,7 @@ class ToolRegistry:
                 return resp.text
         except Exception as e:
             logger.error("contacts_search failed: %s", e)
-            return json.dumps({"error": f"Contacts unavailable. Make sure the Glimpse overlay is running. ({e})"})
+            return json.dumps({"error": f"Contacts unavailable. Make sure the Z Exp overlay is running. ({e})"})
 
     async def _calendar_events(self, days_ahead: str = "7") -> str:
         """Fetch calendar events via the overlay's CalendarServer (port 9322)."""

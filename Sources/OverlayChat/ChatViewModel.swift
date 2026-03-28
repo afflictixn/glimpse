@@ -17,7 +17,7 @@ final class ChatViewModel: ObservableObject {
     // MARK: - Send
 
     func send() {
-        let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = inputText
         guard !text.isEmpty, !isStreaming else { return }
 
         // User message

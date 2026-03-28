@@ -227,7 +227,7 @@ class GeneralAgent:
         today = date.today().isoformat()
 
         system = (
-            "You are Glimpse, an ambient assistant. The user is chatting with someone. "
+            "You are Z, an ambient assistant. The user is chatting with someone. "
             "You have been given their recent chat history and contact info.\n\n"
             f"Today's date is {today}.\n\n"
             "Your HIGHEST priority: if ANY birthday, anniversary, or important date is "

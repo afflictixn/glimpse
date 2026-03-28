@@ -110,7 +110,7 @@ struct FloatingOverlayView: View {
             Text(message.content)
                 .font(.system(size: 11))
                 .foregroundColor(.white.opacity(message.role == .user ? 0.9 : 0.75))
-                .lineLimit(3)
+                .lineLimit(nil)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
                 .background(
