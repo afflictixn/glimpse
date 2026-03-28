@@ -346,15 +346,22 @@ class GeneralAgent:
 
         tool_specs = self._tools.list_specs()
 
-        for _ in range(MAX_TOOL_ROUNDS):
+        last_text = ""
+        for round_num in range(MAX_TOOL_ROUNDS):
             try:
                 response = await self._llm.complete(messages, tools=tool_specs)
             except Exception:
                 logger.error("LLM completion failed", exc_info=True)
-                return "Sorry, I couldn't generate a response right now."
+                return last_text or "Sorry, I couldn't generate a response right now."
+
+            if response.content:
+                last_text = response.content
 
             if not response.tool_calls:
-                return response.content or ""
+                return response.content or last_text or ""
+
+            logger.info("Tool round %d: calling %s", round_num + 1,
+                        ", ".join(tc.name for tc in response.tool_calls))
 
             messages.append(response)
 
@@ -367,7 +374,7 @@ class GeneralAgent:
                     tool_name=tc.name,
                 ))
 
-        return response.content or "I ran out of steps processing your request."
+        return last_text or "I ran out of steps processing your request."
 
     # ── WebSocket to overlay ───────────────────────────────────
 
