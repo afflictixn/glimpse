@@ -8,7 +8,6 @@ class AppType(StrEnum):
     BROWSER = "browser"
     TERMINAL = "terminal"
     IDE = "ide"
-    PRESENTATION = "presentation"
     OTHER = "other"
 
 

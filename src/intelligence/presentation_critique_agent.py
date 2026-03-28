@@ -60,12 +60,16 @@ class PresentationCritiqueAgent(ReasoningAgent):
     def name(self) -> str:
         return "presentation_critique"
 
+    _PRESENTATION_APPS = frozenset({"Keynote"})
+
     async def reason(self, event: Event, db: DatabaseManager) -> Action | None:
-        if event.app_type != "presentation":
+        if event.frame_id is None:
+            logger.debug("Skipping event with no frame_id")
             return None
 
-        if event.frame_id is None:
-            logger.debug("Skipping presentation event with no frame_id")
+        frame = await db.get_frame(event.frame_id)
+        app_name = frame.get("app_name", "") if frame else ""
+        if app_name not in self._PRESENTATION_APPS:
             return None
 
         elapsed = time.monotonic() - self._last_process_time
