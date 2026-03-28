@@ -59,17 +59,16 @@ Glimpse is a macOS-native screen activity capture and intelligence service. It c
 │  Snapshots: JPEG files under ~/.glimpse/data/               │
 │  Retention: periodic cleanup removes frames older than N days│
 └─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌──────────────────── OUTPUT (FastAPI) ───────────────────────┐
-│  /search      — OCR full-text search                        │
-│  /frames/{id} — frame image + metadata + OCR + events       │
-│  /events      — event listing with FTS                      │
-│  /context     — context search + push                       │
-│  /actions     — action search by type/agent/event           │
-│  /health      — liveness, uptime, row counts                │
-│  /raw_sql     — ad-hoc SELECT queries                       │
-└─────────────────────────────────────────────────────────────┘
+                    │                          │
+                    ▼                          ▼
+┌──────────── GENERAL AGENT ────────┐ ┌──── OUTPUT (FastAPI :3030) ──────┐
+│  In-process, long-running loop    │ │  /search, /frames/{id}, /events  │
+│  Receives events + actions via    │ │  /context, /actions, /health     │
+│  direct method calls              │ │  /raw_sql                        │
+│  Uses tools (DB queries, stubs)   │ │  /agent/push, /agent/chat        │
+│  Pushes proposals → overlay (WS)  │ │  /agent/status                   │
+│  Maintains conversation context   │ └──────────────────────────────────┘
+└───────────────────────────────────┘
 ```
 
 ## Key abstractions
@@ -79,6 +78,8 @@ Glimpse is a macOS-native screen activity capture and intelligence service. It c
 | `ProcessAgent` (ABC) | `src/process/process_agent.py` | `GemmaAgent`, `NoOpAgent` |
 | `ReasoningAgent` (ABC) | `src/intelligence/reasoning_agent.py` | (none wired yet) |
 | `ContextProvider` (ABC) | `src/context/context_provider.py` | (none wired yet) |
+| `GeneralAgent` | `src/general_agent/agent.py` | Implemented — queue consumer, tool dispatch, overlay push |
+| `ToolRegistry` | `src/general_agent/tools.py` | `db_query`, `db_raw_sql`, `web_search` (stub), `price_lookup` (stub), `contact_lookup` |
 
 All three follow a plug-in pattern — add new implementations and register them in `main.py`.
 

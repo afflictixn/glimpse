@@ -186,9 +186,9 @@ glimpse/
 │       │   └── intelligence_layer.py # Event subscriber, dispatches to ReasoningAgents
 │       ├── general_agent/
 │       │   ├── __init__.py
-│       │   ├── agent.py            # Core agent loop — queue consumer, conversation state, tool dispatch
-│       │   ├── server.py           # Lightweight HTTP server (POST /push, POST /chat, GET /status)
-│       │   └── tools.py            # Tool registry — web search, lookups, API calls, DB queries
+│       │   ├── agent.py            # Core agent loop — queue consumer, conversation state, tool dispatch, overlay WS push
+│       │   ├── server.py           # FastAPI router mounted at /agent/* (push, chat, status) on main API server
+│       │   └── tools.py            # Tool registry — db_query, db_raw_sql, web_search (stub), price_lookup (stub), contact_lookup
 │       ├── storage/
 │       │   ├── __init__.py
 │       │   ├── database.py         # SQLite + FTS5 manager
@@ -903,62 +903,62 @@ Wires all components and manages lifecycle:
 2. Register `ProcessAgent` instances
 3. Register `ContextProvider` instances
 4. Register `ReasoningAgent` instances
-5. Create `IntelligenceLayer` (with reasoning agents, DB)
-6. Create `GeneralAgent` (with DB, tool registry)
-7. Start FastAPI via `uvicorn` (in-process, same event loop) -- **must start before capture loop** so the API is available when consumers connect
-8. Start general agent HTTP server on its own port
-9. Start `EventTap` on background thread (CGEventTap + NSWorkspace observers)
-10. Start `ActivityFeed` (shared with event tap)
-11. Start capture loop as `asyncio.Task` (with process agents + context providers + intelligence layer)
-12. Start `IntelligenceLayer.run()` as background `asyncio.Task` -- configured to push actions to the general agent
-13. Start `GeneralAgent.run()` as background `asyncio.Task` -- the long-running conversational loop
-14. Signal handling for graceful shutdown
+5. Create `ToolRegistry` and `GeneralAgent` (with DB, tool registry, overlay WS URL)
+6. Create `IntelligenceLayer` (with reasoning agents, DB, general agent)
+7. Start FastAPI via `uvicorn` (in-process, same event loop) -- single server on port 3030, general agent routes mounted at `/agent/*`
+8. Start `EventTap` on background thread (CGEventTap + NSWorkspace observers)
+9. Start `ActivityFeed` (shared with event tap)
+10. Start capture loop as `asyncio.Task` (with process agents + context providers + intelligence layer + general agent)
+11. Start `IntelligenceLayer.run()` as background `asyncio.Task` -- pushes actions to the general agent via direct method calls
+12. Start `GeneralAgent.run()` as background `asyncio.Task` -- the long-running conversational loop
+13. Signal handling for graceful shutdown
 
-CLI via `click` or `argparse`:
+CLI via `argparse`:
 
 ```
-glimpse [--port 3030] [--agent-port 3031] [--data-dir ~/.glimpse] [--jpeg-quality 80]
+glimpse [--port 3030] [--data-dir ~/.glimpse] [--jpeg-quality 80] [--overlay-ws-url ws://localhost:9321]
 ```
 
 ### 15. General Agent (`general_agent/`)
 
-The general agent is a lightweight HTTP server and a long-running process that sits at the end of the pipeline. It's the brain — everything else feeds into it, and it decides what reaches the user.
+The general agent is an in-process long-running loop that sits at the end of the pipeline. It's the brain — everything else feeds into it, and it decides what reaches the user. Its HTTP routes are mounted on the main FastAPI server at `/agent/*` (no separate port).
 
-**`server.py`** -- HTTP endpoints:
+**`server.py`** -- FastAPI router (mounted at `/agent`):
 
-- `POST /push` -- receives events from process agents and actions from the intelligence layer. Payload: `{"type": "event"|"action", "data": {...}}`. Drops the item into the agent's async processing queue. Returns 202 immediately
-- `POST /chat` -- user sends a message. The agent responds within the ongoing conversation context. Streaming response
-- `GET /status` -- health check, queue depth, current conversation state
+- `POST /agent/push` -- receives events from process agents and actions from the intelligence layer. Payload: `{"type": "event"|"action", "data": {...}}`. Drops the item into the agent's async processing queue. Returns 202 immediately. Also receives pushes via direct method calls from the capture loop and intelligence layer (in-process, no HTTP overhead)
+- `POST /agent/chat` -- user sends a message. The agent responds within the ongoing conversation context
+- `GET /agent/status` -- health check, queue depth, current conversation state
 
-**`agent.py`** -- the core loop:
+**`agent.py`** -- the core loop (`GeneralAgent` class):
 
 The agent runs as a continuous `asyncio.Task`:
 
-1. Consumes items from the processing queue (events and actions pushed via `/push`)
-2. For each item, evaluates against current context -- what the user is doing (from recent events), recent conversation history, user preferences
-3. If it decides to act, calls tools to gather more info (web search, price lookup, review analysis, DB queries for history)
-4. Formulates a response -- a notification, a voice suggestion, a full proposal card, or nothing
-5. Pushes the result to the overlay UI via WebSocket (`ws://localhost:9321`)
+1. Consumes items from the processing queue (events and actions pushed via direct method calls or `/agent/push`)
+2. For each item, evaluates importance (actions score higher, certain action_types like "flag"/"escalate" boost score further)
+3. Deduplicates — skips items with identical summaries within a 30s window
+4. For high-importance items, calls tools to gather more info (DB queries for related history, web search stubs)
+5. Formulates a notification and pushes to the overlay UI via WebSocket (`ws://localhost:9321`)
 
-When the user talks to it (via `/chat`):
-- The conversation has full context -- recent screen events, what the agent recently suggested, what the user engaged with or ignored
-- The agent uses tools mid-conversation to answer questions, look things up, do calculations
-- It's a continuous session, not request-response -- the user dips in and out, the agent keeps running
+When the user talks to it (via `/agent/chat`):
+- The conversation has full context — recent screen events (sliding window of 50), recent conversation history (30 turns)
+- The agent uses tools mid-conversation (keyword-based intent detection → tool dispatch)
+- It's a continuous session, not request-response — the user dips in and out, the agent keeps running
 
-**`tools.py`** -- tool registry:
+**`tools.py`** -- tool registry (`ToolRegistry` class):
 
-Pluggable tools the agent can invoke during reasoning. Each tool is a callable with a name and description. Initial set:
+Pluggable tools the agent can invoke during reasoning. Each tool is an async callable with a name, description, and parameter spec. Current set:
 
-- `web_search` -- search the web for info
-- `db_query` -- query the Glimpse database (recent events, OCR history, past actions)
-- `price_lookup` -- check prices across sources
-- `contact_lookup` -- pull context about people (from events history, social context)
+- `db_query` -- FTS search across Glimpse tables (ocr, events, context, actions)
+- `db_raw_sql` -- raw SELECT queries against the database
+- `web_search` -- stub, ready to wire to SerpAPI/Brave Search
+- `price_lookup` -- stub, ready to wire to price comparison APIs
+- `contact_lookup` -- searches OCR text and events for mentions of a person
 
 **What the general agent is NOT:**
 - Not a stateless API -- it maintains a running context/session
 - Not a batch processor -- it responds in real-time to pushes and user input
 - Not the vision model -- it doesn't look at the screen directly, it receives processed events from process agents
-- Not heavy -- minimal resource footprint when idle, just waiting on its queue
+- Not a separate server -- runs in-process, routes on the main FastAPI port
 
 ---
 

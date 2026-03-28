@@ -53,22 +53,27 @@ Glimpse is a macOS-native screen activity capture and intelligence service. It c
                     │                          │
                     ▼                          ▼
 ┌─────────────── STORAGE ──────────┐ ┌──────────── GENERAL AGENT ────────┐
-│  SQLite (WAL) + FTS5             │ │  HTTP server + long-running loop   │
-│  frames, ocr_text, events,       │ │  POST /push ← events + actions    │
-│  context, actions + FTS indexes  │ │  POST /chat ← user messages       │
-│  JPEG files ~/.glimpse/data/     │ │  Uses tools → pushes to overlay   │
-│  Periodic retention cleanup      │ │  Maintains session context        │
+│  SQLite (WAL) + FTS5             │ │  In-process, long-running loop     │
+│  frames, ocr_text, events,       │ │  Receives events + actions via     │
+│  context, actions + FTS indexes  │ │  direct method calls from capture  │
+│  JPEG files ~/.glimpse/data/     │ │  loop and intelligence layer       │
+│  Periodic retention cleanup      │ │  Uses tools (DB, web search stubs) │
+│                                  │ │  Pushes proposals → overlay via WS │
+│                                  │ │  Maintains conversation context    │
 └──────────────────────────────────┘ └──────────────────────────────────┘
                     │
                     ▼
-┌──────────────────── OUTPUT (FastAPI) ───────────────────────┐
-│  /search      — OCR full-text search                        │
-│  /frames/{id} — frame image + metadata + OCR + events       │
-│  /events      — event listing with FTS                      │
-│  /context     — context search + push                       │
-│  /actions     — action search by type/agent/event           │
-│  /health      — liveness, uptime, row counts                │
-│  /raw_sql     — ad-hoc SELECT queries                       │
+┌──────────────────── OUTPUT (FastAPI :3030) ─────────────────┐
+│  /search        — OCR full-text search                      │
+│  /frames/{id}   — frame image + metadata + OCR + events     │
+│  /events        — event listing with FTS                    │
+│  /context       — context search + push                     │
+│  /actions       — action search by type/agent/event         │
+│  /health        — liveness, uptime, row counts              │
+│  /raw_sql       — ad-hoc SELECT queries                     │
+│  /agent/push    — push events/actions to general agent      │
+│  /agent/chat    — user conversation with general agent      │
+│  /agent/status  — agent health, queue depth, session state  │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -79,9 +84,10 @@ Glimpse is a macOS-native screen activity capture and intelligence service. It c
 | `ProcessAgent` (ABC) | `src/process/process_agent.py` | `GemmaAgent`, `NoOpAgent` |
 | `ReasoningAgent` (ABC) | `src/intelligence/reasoning_agent.py` | (none wired yet) |
 | `ContextProvider` (ABC) | `src/context/context_provider.py` | (none wired yet) |
-| `GeneralAgent` | `src/general_agent/agent.py` | (not implemented yet) |
+| `GeneralAgent` | `src/general_agent/agent.py` | Implemented — queue consumer, tool dispatch, overlay push |
+| `ToolRegistry` | `src/general_agent/tools.py` | `db_query`, `db_raw_sql`, `web_search` (stub), `price_lookup` (stub), `contact_lookup` |
 
-All three follow a plug-in pattern — add new implementations and register them in `main.py`.
+ProcessAgent, ReasoningAgent, and ContextProvider follow a plug-in pattern — add new implementations and register them in `main.py`. The GeneralAgent is a singleton wired in `main.py` that receives pushes from the capture loop and intelligence layer.
 
 ## Database schema
 
@@ -124,6 +130,22 @@ pytest tests/test_gemma_agent.py -v -s
 ```
 
 ## Running the app
+
+**Quick start (all services):**
+
+```bash
+./start.sh          # starts Ollama, Python backend, Swift overlay
+./start.sh --kill   # stops everything
+```
+
+This launches three processes:
+1. **Ollama** (port 11434) — local LLM server for Gemma 3 12B
+2. **Python backend** (port 3030) — capture loop, OCR, agents, API, general agent
+3. **Swift overlay** — macOS floating panel (Cmd+Shift+O to toggle), WebSocket on port 9321
+
+Logs go to `/tmp/glimpse-backend.log` and `/tmp/glimpse-overlay.log`.
+
+**Backend only:**
 
 ```bash
 python -m src.main --port 3030 --data-dir ~/.glimpse
