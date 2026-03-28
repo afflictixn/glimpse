@@ -5,20 +5,90 @@
 set -e
 cd "$(dirname "$0")"
 
+# Workaround: M5 Metal 4 tensor ops have a bfloat/half type mismatch in
+# MetalPerformancePrimitives that crashes ggml shader compilation.
+# Disabling tensor ops keeps all other Metal GPU acceleration intact.
+export GGML_METAL_TENSOR_DISABLE=1
+
 # Colors
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 RED='\033[0;31m'
 NC='\033[0m'
 
-# Kill mode
-if [ "$1" = "--kill" ] || [ "$1" = "-k" ]; then
+# Kill helper
+kill_all() {
     echo -e "${YELLOW}Stopping all Glimpse services...${NC}"
     pkill -f "ollama serve" 2>/dev/null && echo "  ollama stopped" || true
     pkill -f GlimpseOverlay 2>/dev/null && echo "  overlay stopped" || true
     pkill -f "src.main" 2>/dev/null && echo "  backend stopped" || true
     echo -e "${GREEN}All stopped.${NC}"
+}
+
+# Kill mode
+if [ "$1" = "--kill" ] || [ "$1" = "-k" ]; then
+    kill_all
     exit 0
+fi
+
+# Restart mode (optionally a single service: overlay, backend, ollama)
+if [ "$1" = "--restart" ] || [ "$1" = "-r" ]; then
+    SERVICE="$2"
+    if [ -z "$SERVICE" ]; then
+        kill_all
+        sleep 2
+        echo ""
+    else
+        case "$SERVICE" in
+            overlay|swift)
+                echo -e "${YELLOW}Restarting overlay...${NC}"
+                pkill -f GlimpseOverlay 2>/dev/null || true
+                sleep 1
+                cd overlay
+                swift run GlimpseOverlay > /tmp/glimpse-overlay.log 2>&1 &
+                cd ..
+                sleep 3
+                if pgrep -f GlimpseOverlay > /dev/null 2>&1; then
+                    echo -e "  ${GREEN}✓${NC} Overlay restarted"
+                else
+                    echo -e "  ${RED}✗${NC} Overlay failed (check /tmp/glimpse-overlay.log)"
+                fi
+                exit 0
+                ;;
+            backend|python)
+                echo -e "${YELLOW}Restarting backend...${NC}"
+                pkill -f "src.main" 2>/dev/null || true
+                sleep 1
+                source venv/bin/activate 2>/dev/null || true
+                python -m src.main --port 3030 > /tmp/glimpse-backend.log 2>&1 &
+                sleep 2
+                if curl -s http://localhost:3030/health > /dev/null 2>&1; then
+                    echo -e "  ${GREEN}✓${NC} Backend restarted (port 3030)"
+                else
+                    echo -e "  ${YELLOW}~${NC} Backend starting... (check /tmp/glimpse-backend.log)"
+                fi
+                exit 0
+                ;;
+            ollama)
+                echo -e "${YELLOW}Restarting Ollama...${NC}"
+                pkill -f "ollama serve" 2>/dev/null || true
+                sleep 1
+                ollama serve > /dev/null 2>&1 &
+                sleep 3
+                if curl -s http://localhost:11434/api/tags > /dev/null 2>&1; then
+                    echo -e "  ${GREEN}✓${NC} Ollama restarted"
+                else
+                    echo -e "  ${RED}✗${NC} Ollama failed to start"
+                fi
+                exit 0
+                ;;
+            *)
+                echo -e "${RED}Unknown service: $SERVICE${NC}"
+                echo "  Valid: overlay (swift), backend (python), ollama"
+                exit 1
+                ;;
+        esac
+    fi
 fi
 
 echo -e "${GREEN}Starting Glimpse...${NC}"
@@ -28,7 +98,7 @@ if curl -s http://localhost:11434/api/tags > /dev/null 2>&1; then
     echo -e "  ${GREEN}✓${NC} Ollama already running"
 else
     echo -e "  ${YELLOW}→${NC} Starting Ollama..."
-    GGML_METAL_TENSOR_DISABLE=1 ollama serve > /dev/null 2>&1 &
+    ollama serve > /dev/null 2>&1 &
     sleep 3
     if curl -s http://localhost:11434/api/tags > /dev/null 2>&1; then
         echo -e "  ${GREEN}✓${NC} Ollama started"
@@ -43,7 +113,7 @@ if curl -s http://localhost:3030/health > /dev/null 2>&1; then
 else
     echo -e "  ${YELLOW}→${NC} Starting Glimpse backend..."
     source venv/bin/activate 2>/dev/null || true
-    GGML_METAL_TENSOR_DISABLE=1 python -m src.main --port 3030 > /tmp/glimpse-backend.log 2>&1 &
+    python -m src.main --port 3030 > /tmp/glimpse-backend.log 2>&1 &
     sleep 2
     if curl -s http://localhost:3030/health > /dev/null 2>&1; then
         echo -e "  ${GREEN}✓${NC} Glimpse backend started (port 3030)"

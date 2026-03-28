@@ -40,8 +40,7 @@ struct SuggestionView: View {
                             .buttonStyle(.plain)
 
                             Button("open chat") {
-                                state.showChatPanel = true
-                                state.dismissSuggestion()
+                                state.openFloatingOverlay()
                                 isVisible = false
                                 isExpanded = false
                             }
@@ -53,17 +52,21 @@ struct SuggestionView: View {
                 }
                 .frame(maxWidth: 300)
                 .opacity(isVisible ? 1 : 0)
-                .offset(x: isVisible ? 0 : 20)
+                .offset(x: isVisible ? 0 : 120)
                 .onAppear {
-                    withAnimation(.easeOut(duration: 0.4)) {
+                    withAnimation(.spring(response: 0.6, dampingFraction: 0.7, blendDuration: 0)) {
                         isVisible = true
                     }
                     scheduleAutoDismiss()
                 }
                 .onChange(of: state.currentSuggestion) { _ in
                     isExpanded = false
-                    withAnimation(.easeOut(duration: 0.4)) {
-                        isVisible = true
+                    isVisible = false
+                    // Small delay so it resets position before sliding back in
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                        withAnimation(.spring(response: 0.6, dampingFraction: 0.7, blendDuration: 0)) {
+                            isVisible = true
+                        }
                     }
                     scheduleAutoDismiss()
                 }

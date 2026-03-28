@@ -2,21 +2,27 @@ import SwiftUI
 
 struct ChatView: View {
     @ObservedObject var viewModel: ChatViewModel
+    @ObservedObject var settings: Settings
+    @State private var showSettings: Bool = false
 
     var body: some View {
         VStack(spacing: 0) {
             headerBar
             Divider().overlay(Color.white.opacity(0.15))
 
-            // Proactive suggestion banner
-            if let suggestion = viewModel.currentSuggestion {
-                suggestionBanner(suggestion)
-                Divider().overlay(Color.white.opacity(0.15))
-            }
+            if showSettings {
+                SettingsView(settings: settings)
+            } else {
+                // Proactive suggestion banner
+                if let suggestion = viewModel.currentSuggestion {
+                    suggestionBanner(suggestion)
+                    Divider().overlay(Color.white.opacity(0.15))
+                }
 
-            messagesArea
-            Divider().overlay(Color.white.opacity(0.15))
-            inputBar
+                messagesArea
+                Divider().overlay(Color.white.opacity(0.15))
+                inputBar
+            }
         }
         .background(VisualEffectBackground(material: .hudWindow))
     }
@@ -35,13 +41,23 @@ struct ChatView: View {
 
             Spacer()
 
-            Button(action: { viewModel.clearChat() }) {
-                Image(systemName: "trash")
+            Button(action: { withAnimation(.easeInOut(duration: 0.15)) { showSettings.toggle() } }) {
+                Image(systemName: showSettings ? "chevron.left" : "gearshape")
                     .font(.system(size: 12))
                     .foregroundColor(.white.opacity(0.6))
             }
             .buttonStyle(.plain)
-            .help("Clear chat")
+            .help(showSettings ? "Back to chat" : "Settings")
+
+            if !showSettings {
+                Button(action: { viewModel.clearChat() }) {
+                    Image(systemName: "trash")
+                        .font(.system(size: 12))
+                        .foregroundColor(.white.opacity(0.6))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Clear chat")
+            }
 
             Button(action: { NSApp.keyWindow?.orderOut(nil) }) {
                 Image(systemName: "xmark")

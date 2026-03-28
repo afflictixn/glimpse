@@ -12,8 +12,8 @@ class Settings:
     jpeg_quality: int = 80
 
     # Capture timing
-    poll_interval_ms: int = 50
-    min_capture_interval_ms: int = 200
+    poll_interval_ms: int = 250
+    min_capture_interval_ms: int = 2000
     idle_capture_interval_ms: int = 30_000
     typing_pause_delay_ms: int = 500
     visual_check_interval_ms: int = 3_000

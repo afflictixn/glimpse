@@ -11,6 +11,7 @@ final class KeyablePanel: NSPanel {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var edgeGlowWindow: NSPanel!
     private var suggestionWindow: NSPanel!
+    private var floatingOverlayWindow: KeyablePanel!
     private var chatPanel: KeyablePanel!
     private var statusItem: NSStatusItem!
 
@@ -23,13 +24,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Lifecycle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.accessory)
+        print("[glimpse] launching...")
+        NSApp.setActivationPolicy(.regular)
+
+        // Prompt for accessibility permissions (needed for global hotkeys)
+        requestAccessibilityIfNeeded()
 
         overlayState = OverlayState()
         chatViewModel = ChatViewModel()
 
         setupEdgeGlowWindow()
         setupSuggestionWindow()
+        setupFloatingOverlayWindow()
         setupChatPanel()
         setupStatusBar()
         setupGlobalHotkey()
@@ -39,6 +45,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Startup demo
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
             self?.overlayState.handleProposal(text: "glimpse is alive", importance: .medium)
+        }
+    }
+
+    // MARK: - Accessibility Permissions
+
+    private func requestAccessibilityIfNeeded() {
+        let options = [kAXTrustedCheckOptionPrompt.takeRetainedValue(): true] as CFDictionary
+        let trusted = AXIsProcessTrustedWithOptions(options)
+        if trusted {
+            print("[glimpse] accessibility: granted")
+        } else {
+            print("[glimpse] accessibility: not granted — macOS should be prompting now")
         }
     }
 
@@ -104,6 +122,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         suggestionWindow.orderFrontRegardless()
     }
 
+    // MARK: - Floating Overlay Window (hidden by default)
+
+    private func setupFloatingOverlayWindow() {
+        guard let screen = NSScreen.main else { return }
+        let visibleFrame = screen.visibleFrame
+
+        let width: CGFloat = 300
+        let height: CGFloat = 360
+        let origin = CGPoint(
+            x: visibleFrame.maxX - width - 40,
+            y: visibleFrame.minY + 60
+        )
+
+        floatingOverlayWindow = KeyablePanel(
+            contentRect: NSRect(origin: origin, size: CGSize(width: width, height: height)),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+
+        floatingOverlayWindow.level = .floating
+        floatingOverlayWindow.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
+        floatingOverlayWindow.isOpaque = false
+        floatingOverlayWindow.backgroundColor = .clear
+        floatingOverlayWindow.hasShadow = true
+        floatingOverlayWindow.isMovableByWindowBackground = true
+        floatingOverlayWindow.becomesKeyOnlyIfNeeded = true
+        floatingOverlayWindow.hidesOnDeactivate = false
+        floatingOverlayWindow.animationBehavior = .utilityWindow
+
+        let floatingView = FloatingOverlayView(state: overlayState, viewModel: chatViewModel)
+        let hostingView = NSHostingView(rootView: floatingView)
+        floatingOverlayWindow.contentView = hostingView
+        floatingOverlayWindow.orderOut(nil)
+    }
+
     // MARK: - Chat Panel (hidden by default)
 
     private func setupChatPanel() {
@@ -136,7 +190,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         chatPanel.hidesOnDeactivate = false
         chatPanel.animationBehavior = .utilityWindow
 
-        let chatView = ChatView(viewModel: chatViewModel)
+        let chatView = ChatView(viewModel: chatViewModel, settings: overlayState.settings)
         let hostingView = NSHostingView(rootView: chatView)
         hostingView.wantsLayer = true
         hostingView.layer?.cornerRadius = 12
@@ -150,29 +204,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - State Binding
 
     private func bindState() {
-        overlayState.$showChatPanel
+        overlayState.$uiMode
             .removeDuplicates()
-            .sink { [weak self] show in
+            .sink { [weak self] mode in
                 guard let self else { return }
-                if show {
-                    self.chatPanel.alphaValue = 0
-                    self.chatPanel.orderFrontRegardless()
-                    NSAnimationContext.runAnimationGroup { ctx in
-                        ctx.duration = 0.25
-                        ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                        self.chatPanel.animator().alphaValue = 1
-                    }
-                } else {
-                    NSAnimationContext.runAnimationGroup({ ctx in
-                        ctx.duration = 0.2
-                        ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
-                        self.chatPanel.animator().alphaValue = 0
-                    }, completionHandler: {
-                        self.chatPanel.orderOut(nil)
-                    })
-                }
+                self.transitionTo(mode)
             }
             .store(in: &cancellables)
+    }
+
+    private func transitionTo(_ mode: OverlayState.UIMode) {
+        switch mode {
+        case .ambient:
+            fadeOut(floatingOverlayWindow)
+            fadeOut(chatPanel)
+            // Suggestion window is managed by OverlayState.currentSuggestion — always ready
+
+        case .floatingOverlay:
+            fadeOut(chatPanel)
+            fadeIn(floatingOverlayWindow)
+
+        case .fullPanel:
+            fadeOut(floatingOverlayWindow)
+            fadeIn(chatPanel)
+        }
+    }
+
+    private func fadeIn(_ panel: NSPanel) {
+        guard panel.alphaValue < 1 || !panel.isVisible else { return }
+        panel.alphaValue = 0
+        panel.orderFrontRegardless()
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.25
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            panel.animator().alphaValue = 1
+        }
+    }
+
+    private func fadeOut(_ panel: NSPanel) {
+        guard panel.isVisible else { return }
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.2
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            panel.animator().alphaValue = 0
+        }, completionHandler: {
+            panel.orderOut(nil)
+        })
     }
 
     // MARK: - WebSocket Server (receives from Python backend)
@@ -212,6 +289,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let menu = NSMenu()
         menu.addItem(NSMenuItem(title: "Toggle Chat  (Cmd+Shift+O)", action: #selector(toggleChat), keyEquivalent: ""))
+
+        let voiceItem = NSMenuItem(title: "Voice", action: #selector(toggleVoice), keyEquivalent: "")
+        voiceItem.state = overlayState.settings.voiceEnabled ? .on : .off
+        menu.addItem(voiceItem)
+
         menu.addItem(NSMenuItem.separator())
 
         // Demo menu for testing animations
@@ -262,6 +344,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func toggleChat() {
         overlayState.toggleChat()
+    }
+
+    @objc private func toggleVoice() {
+        overlayState.settings.voiceEnabled.toggle()
+        // Update menu item state
+        if let menu = statusItem.menu,
+           let voiceItem = menu.items.first(where: { $0.title == "Voice" }) {
+            voiceItem.state = overlayState.settings.voiceEnabled ? .on : .off
+        }
     }
 
     @objc private func demoSuggestion() {
