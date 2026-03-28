@@ -22,8 +22,8 @@ NOTIFICATION_WINDOW_S = 30.0
 IMPORTANCE_THRESHOLD = 0.5
 
 _CONTEXT_COOLDOWNS: dict[str, float] = {
-    "gemma3": 10.0,
-    "social_context": 10.0,
+    "gemma3": 20.0,
+    "social_context": 20.0,
 }
 _DEFAULT_CONTEXT_COOLDOWN = 30.0
 
