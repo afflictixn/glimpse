@@ -15,7 +15,8 @@ from src.capture.event_tap import CaptureTrigger, EventTap
 from src.capture.triggers import CaptureLoop
 from src.config import Settings, set_settings
 from src.intelligence.intelligence_layer import IntelligenceLayer
-from src.process.process_agent import NoOpAgent, ProcessAgent
+from src.process.gemma_agent import GemmaAgent
+from src.process.process_agent import ProcessAgent
 from src.context.context_provider import ContextProvider
 from src.intelligence.reasoning_agent import ReasoningAgent
 from src.storage.database import DatabaseManager
@@ -32,6 +33,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--retention-days", type=int, default=7, help="Data retention in days")
     parser.add_argument("--max-db-size-mb", type=int, default=10_000, help="Max database size in MB")
     parser.add_argument("--log-level", type=str, default="INFO", help="Logging level")
+    parser.add_argument("--debug", action="store_true", help="Enable debug logging for glimpse internals (suppresses third-party noise)")
+    parser.add_argument("--ollama-model", type=str, default="gemma3:12b", help="Ollama model name")
+    parser.add_argument("--ollama-url", type=str, default="http://localhost:11434", help="Ollama server base URL")
+    parser.add_argument("--include-ocr", action="store_true", help="Include OCR text in Gemma agent prompt")
     return parser.parse_args()
 
 
@@ -56,7 +61,14 @@ async def run(settings: Settings) -> None:
     db = DatabaseManager(settings)
     await db.initialize()
 
-    process_agents: list[ProcessAgent] = [NoOpAgent()]
+    process_agents: list[ProcessAgent] = [
+        GemmaAgent(
+            ollama_base_url=settings.ollama_base_url,
+            model=settings.ollama_model,
+            include_ocr=settings.include_ocr,
+            timeout_s=settings.ollama_timeout_s,
+        ),
+    ]
     context_providers: list[ContextProvider] = []
     reasoning_agents: list[ReasoningAgent] = []
 
@@ -95,8 +107,8 @@ async def run(settings: Settings) -> None:
         app,
         host="0.0.0.0",
         port=settings.port,
-        log_level="info",
-        access_log=False,
+        log_level="debug" if settings.debug else "info",
+        access_log=settings.debug,
     )
     server = uvicorn.Server(config)
 
@@ -140,14 +152,27 @@ async def run(settings: Settings) -> None:
     logger.info("Glimpse stopped")
 
 
+def _configure_logging(args: argparse.Namespace) -> None:
+    if args.debug:
+        logging.basicConfig(
+            level=logging.WARNING,
+            format="%(asctime)s [%(levelname)s] %(name)s %(module)s:%(lineno)d: %(message)s",
+            datefmt="%H:%M:%S",
+        )
+        logging.getLogger("src").setLevel(logging.DEBUG)
+        logging.getLogger("glimpse").setLevel(logging.DEBUG)
+        logging.getLogger("uvicorn.access").setLevel(logging.INFO)
+    else:
+        logging.basicConfig(
+            level=getattr(logging, args.log_level.upper(), logging.INFO),
+            format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+            datefmt="%H:%M:%S",
+        )
+
+
 def main() -> None:
     args = parse_args()
-
-    logging.basicConfig(
-        level=getattr(logging, args.log_level.upper(), logging.INFO),
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%H:%M:%S",
-    )
+    _configure_logging(args)
 
     settings = Settings(
         port=args.port,
@@ -155,6 +180,10 @@ def main() -> None:
         jpeg_quality=args.jpeg_quality,
         max_retention_days=args.retention_days,
         max_db_size_mb=args.max_db_size_mb,
+        ollama_base_url=args.ollama_url,
+        ollama_model=args.ollama_model,
+        include_ocr=args.include_ocr,
+        debug=args.debug,
     )
 
     asyncio.run(run(settings))

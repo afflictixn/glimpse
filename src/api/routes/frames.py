@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -92,10 +95,12 @@ async def get_frame_image(request: Request, frame_id: int):
     db = request.app.state.db
     frame = await db.get_frame(frame_id)
     if frame is None:
+        logger.debug("Frame %d not found", frame_id)
         raise HTTPException(status_code=404, detail="Frame not found")
 
     snapshot_path = frame.get("snapshot_path")
     if not snapshot_path or not Path(snapshot_path).exists():
+        logger.warning("Snapshot file missing for frame %d: %s", frame_id, snapshot_path)
         raise HTTPException(status_code=404, detail="Snapshot file not found")
 
     return FileResponse(snapshot_path, media_type="image/jpeg")
@@ -106,6 +111,7 @@ async def get_frame_metadata(request: Request, frame_id: int) -> FrameDetail:
     db = request.app.state.db
     frame = await db.get_frame(frame_id)
     if frame is None:
+        logger.debug("Frame %d not found for metadata", frame_id)
         raise HTTPException(status_code=404, detail="Frame not found")
 
     ocr_data = frame.get("ocr")

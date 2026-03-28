@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import logging
 
 from fastapi import APIRouter, Query, Request
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -43,6 +46,7 @@ async def search_events(
     end_time: str | None = Query(None),
 ) -> list[EventResult]:
     db = request.app.state.db
+    logger.debug("Event search q=%r type=%s agent=%s limit=%d", q, app_type, agent_name, limit)
     rows = await db.search_events(
         query=q,
         app_type=app_type,
@@ -51,6 +55,7 @@ async def search_events(
         start_time=start_time,
         end_time=end_time,
     )
+    logger.debug("Event search returned %d results", len(rows))
     return [
         EventResult(
             event_id=r["event_id"],

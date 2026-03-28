@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import logging
 
 from fastapi import APIRouter, Query, Request
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -51,6 +54,7 @@ async def search_context(
     end_time: str | None = Query(None),
 ) -> list[ContextResult]:
     db = request.app.state.db
+    logger.debug("Context search q=%r source=%s type=%s limit=%d", q, source, content_type, limit)
     rows = await db.search_context(
         query=q,
         source=source,
@@ -115,4 +119,5 @@ async def push_context(request: Request, body: ContextInput) -> dict:
         metadata=body.metadata or {},
     )
     context_id = await db.insert_context(frame_id, ctx)
+    logger.debug("Inserted context %d (source=%s) for frame %d", context_id, body.source, frame_id)
     return {"context_id": context_id, "frame_id": frame_id}

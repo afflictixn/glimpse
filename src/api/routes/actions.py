@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import logging
 
 from fastapi import APIRouter, Query, Request
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -47,6 +50,7 @@ async def search_actions(
     end_time: str | None = Query(None),
 ) -> list[ActionResult]:
     db = request.app.state.db
+    logger.debug("Action search q=%r type=%s agent=%s limit=%d", q, action_type, agent_name, limit)
     rows = await db.search_actions(
         query=q,
         action_type=action_type,

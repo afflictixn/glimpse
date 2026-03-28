@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import logging
 
 from fastapi import APIRouter, Query, Request
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -29,6 +32,7 @@ async def search_ocr(
     end_time: str | None = Query(None),
 ) -> list[OCRSearchResult]:
     db = request.app.state.db
+    logger.debug("OCR search q=%r app=%s limit=%d", q, app_name, limit)
     rows = await db.search(
         query=q,
         limit=limit,
@@ -36,4 +40,5 @@ async def search_ocr(
         end_time=end_time,
         app_name=app_name,
     )
+    logger.debug("OCR search returned %d results", len(rows))
     return [OCRSearchResult(**r) for r in rows]

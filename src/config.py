@@ -25,6 +25,15 @@ class Settings:
     max_db_size_mb: int = 10_000
     cleanup_interval_hours: int = 1
 
+    # Ollama / Gemma agent
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_model: str = "gemma3:12b"
+    include_ocr: bool = False
+    ollama_timeout_s: int = 30
+
+    # Debug
+    debug: bool = False
+
     @property
     def db_path(self) -> Path:
         return self.data_dir / "glimpse.db"
