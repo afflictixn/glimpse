@@ -155,16 +155,26 @@ class TestBuildSummary:
         agent = SocialContextAgent(tools=_make_mock_tools())
         context = {
             "Alice": {
-                "contact_info": {"birthday": "4-01", "organization": "Google"},
-                "recent_messages": [{"text": "hey"}],
+                "recent_messages": [{"text": "My birthday is April 1st!"}],
                 "memories": [{"fact": "Likes hiking"}],
             }
         }
-        summary = agent._build_summary(["Alice"], context, "Messages")
+        analysis = {
+            "insights": ["Alice's birthday is April 1st"],
+            "birthday": "April 1st",
+            "action_items": [],
+        }
+        summary = agent._build_summary(["Alice"], context, "Messages", analysis)
         assert "Alice" in summary
-        assert "birthday: 4-01" in summary
-        assert "Google" in summary
+        assert "April 1st" in summary
         assert "hiking" in summary
+
+    async def test_empty_summary_when_no_insights(self):
+        agent = SocialContextAgent(tools=_make_mock_tools())
+        context = {"Bob": {"recent_messages": [{"text": "hey"}]}}
+        analysis = {"insights": [], "birthday": None, "action_items": []}
+        summary = agent._build_summary(["Bob"], context, "Messages", analysis)
+        assert summary == ""
 
 
 @pytest.mark.asyncio
@@ -195,18 +205,27 @@ class TestFullPipeline:
 
         async def mock_call(tool_name, **kwargs):
             if tool_name == "imessage_conversation":
-                return json.dumps([{"from": "Bob", "text": "Happy birthday soon!"}])
+                return json.dumps([{"from": "Bob", "text": "My birthday is March 30th! Let's celebrate"}])
             if tool_name == "contacts_search":
-                return json.dumps([{"given_name": "Bob", "birthday": "3-30"}])
+                return json.dumps([{"given_name": "Bob"}])
             return json.dumps([])
 
         tools.call = mock_call
         agent = SocialContextAgent(tools=tools)
         agent._call_ollama = MagicMock(return_value='["Bob"]')
 
+        # Mock the analysis to return real extracted facts
+        async def mock_analyze(names, context):
+            return {
+                "insights": ["Bob's birthday is March 30th", "Bob wants to celebrate"],
+                "birthday": "March 30th",
+                "action_items": ["Plan celebration with Bob"],
+            }
+        agent._analyze_messages = mock_analyze
+
         result = await agent.process(
             _make_image(),
-            "Bob: Hey! What are you up to this weekend? Let's catch up over coffee",
+            "Bob: Hey! My birthday is March 30th! Let's celebrate over coffee",
             "Messages",
             "Bob - iMessage",
         )
@@ -214,5 +233,5 @@ class TestFullPipeline:
         assert result is not None
         assert result.agent_name == "social_context"
         assert "Bob" in result.summary
-        assert "birthday" in result.summary
+        assert "March 30th" in result.summary
         assert "Bob" in result.metadata["contacts"]

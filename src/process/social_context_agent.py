@@ -35,6 +35,22 @@ Return ONLY a JSON array of strings. Each string should be a contact name, email
 or phone number found on screen. Return [] if the screen is NOT a chat app or \
 if no contacts are visible. Do NOT invent or hallucinate names."""
 
+_ANALYZE_PROMPT = """\
+You are analyzing a chat conversation. Look for ONLY facts explicitly stated in the messages.
+Extract any of these if mentioned:
+- Birthdays or ages ("my birthday is...", "happy birthday", "turning 30")
+- Plans or events ("let's meet Thursday", "dinner at 7", "flying to Paris next week")
+- Requests or action items ("can you send me...", "don't forget to...")
+- Emotional tone if notable (someone upset, excited, celebrating)
+
+Return a JSON object with:
+- "insights": array of short factual strings found in the messages (empty if nothing notable)
+- "birthday": string with the date if ANY birthday is mentioned, null otherwise
+- "action_items": array of things the user should do/remember, empty if none
+
+ONLY include facts from the actual messages. NEVER invent or assume anything. \
+If the conversation is mundane small talk, return {"insights": [], "birthday": null, "action_items": []}."""
+
 
 class SocialContextAgent(ProcessAgent):
     """Detects messaging activity and enriches it with conversation/contact context."""
@@ -80,8 +96,11 @@ class SocialContextAgent(ProcessAgent):
         if not context:
             return None
 
+        # Analyze the messages with small LLM — extract only real facts
+        analysis = await self._analyze_messages(names, context)
+
         # Build a rich summary for the GeneralAgent
-        summary = self._build_summary(names, context, app_name)
+        summary = self._build_summary(names, context, app_name, analysis)
 
         if not summary:
             return None
@@ -220,37 +239,77 @@ class SocialContextAgent(ProcessAgent):
 
         return context
 
+    async def _analyze_messages(self, names: list[str], context: dict[str, Any]) -> dict[str, Any]:
+        """Use small LLM to extract real facts from message history."""
+        # Build the conversation text to analyze
+        msg_lines = []
+        for name, ctx in context.items():
+            msgs = ctx.get("recent_messages", [])
+            if not isinstance(msgs, list):
+                continue
+            for m in msgs[:15]:
+                sender = "me" if m.get("is_from_me") or m.get("from") == "me" else name
+                text = m.get("text", "")[:200]
+                if text:
+                    msg_lines.append(f"{sender}: {text}")
+
+        if not msg_lines:
+            return {}
+
+        msg_lines.reverse()
+        conversation_text = "\n".join(msg_lines)
+
+        try:
+            raw = await asyncio.to_thread(
+                self._call_ollama_raw,
+                system=_ANALYZE_PROMPT,
+                prompt=f"Analyze this conversation:\n\n{conversation_text}",
+                max_tokens=256,
+            )
+            # Parse JSON
+            cleaned = raw.strip()
+            if cleaned.startswith("```"):
+                lines = cleaned.split("\n")
+                lines = [ln for ln in lines if not ln.strip().startswith("```")]
+                cleaned = "\n".join(lines)
+            return json.loads(cleaned)
+        except (json.JSONDecodeError, Exception):
+            logger.debug("Message analysis failed: %s", raw[:200] if 'raw' in dir() else "error")
+            return {}
+
     def _build_summary(
         self, names: list[str], context: dict[str, Any], app_name: str | None,
+        analysis: dict[str, Any] | None = None,
     ) -> str:
-        """Build raw context string — the GeneralAgent's big model will analyze it."""
+        """Build summary from analyzed facts — only real data, no hallucination."""
+        insights = (analysis or {}).get("insights", [])
+        birthday = (analysis or {}).get("birthday")
+        action_items = (analysis or {}).get("action_items", [])
+
+        # If analysis found nothing interesting, don't push anything
+        if not insights and not birthday and not action_items:
+            return ""
+
         parts = [f"User is chatting with {', '.join(names)} in {app_name or 'a messaging app'}."]
 
+        if birthday:
+            parts.append(f"BIRTHDAY DETECTED: {birthday}")
+
+        for insight in insights[:5]:
+            if isinstance(insight, str) and insight.strip():
+                parts.append(f"- {insight}")
+
+        if action_items:
+            parts.append("Action items:")
+            for item in action_items[:3]:
+                if isinstance(item, str) and item.strip():
+                    parts.append(f"  - {item}")
+
+        # Include memories if any
         for name, ctx in context.items():
-            if "contact_info" in ctx:
-                info = ctx["contact_info"]
-                if info.get("birthday"):
-                    parts.append(f"IMPORTANT: {name}'s birthday is {info['birthday']}")
-                if info.get("organization"):
-                    parts.append(f"{name} works at {info['organization']}")
-
-            if "recent_messages" in ctx:
-                msgs = ctx["recent_messages"]
-                if isinstance(msgs, list) and len(msgs) > 0:
-                    msg_lines = []
-                    for m in msgs[:15]:
-                        sender = "me" if m.get("is_from_me") or m.get("from") == "me" else name
-                        text = m.get("text", "")[:200]
-                        ts = m.get("msg_date", m.get("timestamp", ""))
-                        if text:
-                            msg_lines.append(f"[{ts}] {sender}: {text}")
-                    if msg_lines:
-                        msg_lines.reverse()
-                        parts.append(f"Recent chat with {name}:\n" + "\n".join(msg_lines))
-
             if "memories" in ctx:
                 for mem in ctx["memories"][:2]:
                     if isinstance(mem, dict) and mem.get("fact"):
                         parts.append(f"Remembered about {name}: {mem['fact']}")
 
-        return "\n\n".join(parts)
+        return "\n".join(parts)

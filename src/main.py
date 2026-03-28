@@ -23,7 +23,6 @@ from src.intelligence.presentation_critique_agent import PresentationCritiqueAge
 from src.process.browser_content_agent import BrowserContentAgent
 from src.process.gemma_agent import GemmaAgent
 from src.process.process_agent import ProcessAgent
-from src.process.social_context_agent import SocialContextAgent
 from src.context.context_provider import ContextProvider
 from src.intelligence.reasoning_agent import ReasoningAgent
 from src.storage.database import DatabaseManager
@@ -86,11 +85,6 @@ async def run(settings: Settings) -> None:
             max_image_width=settings.ollama_max_image_width,
         ),
         BrowserContentAgent(),
-        SocialContextAgent(
-            tools=tool_registry,
-            ollama_base_url=settings.ollama_base_url,
-            model="gemma3:1b",
-        ),
     ]
     context_providers: list[ContextProvider] = []
 
