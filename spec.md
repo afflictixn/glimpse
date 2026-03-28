@@ -65,14 +65,15 @@ Build everything under glimpse/src
 
 ## Architecture Overview
 
-The system has four layers of data processing:
+The system has five layers of data processing:
 
 1. **OCR flow** -- always runs Apple Vision OCR to extract full text from screenshots
 2. **Agent flow** -- feeds screenshots to registered `ProcessAgent` implementations that produce structured `Event` objects
 3. **Context flow** -- collects `AdditionalContext` from registered `ContextProvider` implementations (e.g. Chrome DevTools, clipboard)
-4. **Intelligence layer** -- downstream of the Agent flow; registered `ReasoningAgent` implementations receive Events, independently query the database for additional context, and produce `Action` objects for downstream consumption
+4. **Intelligence layer** -- downstream of the Agent flow; registered `ReasoningAgent` implementations receive Events, independently query the database for additional context, and produce `Action` objects
+5. **General agent** -- a lightweight HTTP server and long-running conversational loop. Receives pushes from process agents (events) and the intelligence layer (actions) via HTTP. The user can talk to it directly — it maintains full session context across the conversation, uses tools mid-conversation to pull additional info (web search, lookups, API calls), decides what's worth surfacing, and pushes proposals/notifications to the overlay UI via WebSocket. It's not a stateless API — it's a persistent process with memory that the user dips in and out of
 
-All data flows share `frame_id` in the database. The Intelligence Layer operates asynchronously -- it does not block the capture loop.
+All data flows share `frame_id` in the database. The Intelligence Layer and General Agent operate asynchronously -- they do not block the capture loop.
 
 ```mermaid
 flowchart TB
@@ -112,10 +113,13 @@ flowchart TB
         RA[ReasoningAgent\nabstract, pluggable]
     end
 
-    subgraph consumers [Consumers]
-        AG1[AI Agents]
-        AG2[MCP Clients]
-        AG3[Scripts]
+    subgraph general [General Agent]
+        GA[General Agent\nHTTP server + long-running loop]
+        TL[Tools\nweb search, lookups, APIs]
+    end
+
+    subgraph overlay [Overlay UI]
+        OV[macOS Overlay\nSwift, NSPanel]
     end
 
     BC --> CL
@@ -138,11 +142,15 @@ flowchart TB
     RA -->|"query DB"| DB
     RA -->|"actions row"| DB
 
+    PA -->|"HTTP POST /push"| GA
+    RA -->|"HTTP POST /push"| GA
+    GA --> TL
+    TL -->|"pull info"| GA
+    GA -->|"WebSocket"| OV
+    OV -->|"HTTP POST /chat"| GA
+
     DB --> FA
     FS --> FA
-    FA --> AG1
-    FA --> AG2
-    FA --> AG3
 ```
 
 
@@ -176,6 +184,11 @@ glimpse/
 │       │   ├── __init__.py
 │       │   ├── reasoning_agent.py  # Abstract ReasoningAgent base class
 │       │   └── intelligence_layer.py # Event subscriber, dispatches to ReasoningAgents
+│       ├── general_agent/
+│       │   ├── __init__.py
+│       │   ├── agent.py            # Core agent loop — queue consumer, conversation state, tool dispatch
+│       │   ├── server.py           # Lightweight HTTP server (POST /push, POST /chat, GET /status)
+│       │   └── tools.py            # Tool registry — web search, lookups, API calls, DB queries
 │       ├── storage/
 │       │   ├── __init__.py
 │       │   ├── database.py         # SQLite + FTS5 manager
@@ -891,18 +904,61 @@ Wires all components and manages lifecycle:
 3. Register `ContextProvider` instances
 4. Register `ReasoningAgent` instances
 5. Create `IntelligenceLayer` (with reasoning agents, DB)
-6. Start FastAPI via `uvicorn` (in-process, same event loop) -- **must start before capture loop** so the API is available when consumers connect
-7. Start `EventTap` on background thread (CGEventTap + NSWorkspace observers)
-8. Start `ActivityFeed` (shared with event tap)
-9. Start capture loop as `asyncio.Task` (with process agents + context providers + intelligence layer)
-10. Start `IntelligenceLayer.run()` as background `asyncio.Task`
-11. Signal handling for graceful shutdown
+6. Create `GeneralAgent` (with DB, tool registry)
+7. Start FastAPI via `uvicorn` (in-process, same event loop) -- **must start before capture loop** so the API is available when consumers connect
+8. Start general agent HTTP server on its own port
+9. Start `EventTap` on background thread (CGEventTap + NSWorkspace observers)
+10. Start `ActivityFeed` (shared with event tap)
+11. Start capture loop as `asyncio.Task` (with process agents + context providers + intelligence layer)
+12. Start `IntelligenceLayer.run()` as background `asyncio.Task` -- configured to push actions to the general agent
+13. Start `GeneralAgent.run()` as background `asyncio.Task` -- the long-running conversational loop
+14. Signal handling for graceful shutdown
 
 CLI via `click` or `argparse`:
 
 ```
-glimpse [--port 3030] [--data-dir ~/.glimpse] [--jpeg-quality 80]
+glimpse [--port 3030] [--agent-port 3031] [--data-dir ~/.glimpse] [--jpeg-quality 80]
 ```
+
+### 15. General Agent (`general_agent/`)
+
+The general agent is a lightweight HTTP server and a long-running process that sits at the end of the pipeline. It's the brain — everything else feeds into it, and it decides what reaches the user.
+
+**`server.py`** -- HTTP endpoints:
+
+- `POST /push` -- receives events from process agents and actions from the intelligence layer. Payload: `{"type": "event"|"action", "data": {...}}`. Drops the item into the agent's async processing queue. Returns 202 immediately
+- `POST /chat` -- user sends a message. The agent responds within the ongoing conversation context. Streaming response
+- `GET /status` -- health check, queue depth, current conversation state
+
+**`agent.py`** -- the core loop:
+
+The agent runs as a continuous `asyncio.Task`:
+
+1. Consumes items from the processing queue (events and actions pushed via `/push`)
+2. For each item, evaluates against current context -- what the user is doing (from recent events), recent conversation history, user preferences
+3. If it decides to act, calls tools to gather more info (web search, price lookup, review analysis, DB queries for history)
+4. Formulates a response -- a notification, a voice suggestion, a full proposal card, or nothing
+5. Pushes the result to the overlay UI via WebSocket (`ws://localhost:9321`)
+
+When the user talks to it (via `/chat`):
+- The conversation has full context -- recent screen events, what the agent recently suggested, what the user engaged with or ignored
+- The agent uses tools mid-conversation to answer questions, look things up, do calculations
+- It's a continuous session, not request-response -- the user dips in and out, the agent keeps running
+
+**`tools.py`** -- tool registry:
+
+Pluggable tools the agent can invoke during reasoning. Each tool is a callable with a name and description. Initial set:
+
+- `web_search` -- search the web for info
+- `db_query` -- query the Glimpse database (recent events, OCR history, past actions)
+- `price_lookup` -- check prices across sources
+- `contact_lookup` -- pull context about people (from events history, social context)
+
+**What the general agent is NOT:**
+- Not a stateless API -- it maintains a running context/session
+- Not a batch processor -- it responds in real-time to pushes and user input
+- Not the vision model -- it doesn't look at the screen directly, it receives processed events from process agents
+- Not heavy -- minimal resource footprint when idle, just waiting on its queue
 
 ---
 
@@ -921,7 +977,8 @@ sequenceDiagram
     participant DB as SQLite+FTS5
     participant FS as Disk JPEG
     participant API as FastAPI
-    participant Consumer as AI Agent / Script
+    participant GA as General Agent
+    participant OV as Overlay UI
 
     OS->>ET: CGEventTap callback (click)
     ET->>CL: queue.put(CLICK)
@@ -942,6 +999,7 @@ sequenceDiagram
         Note over CL: set event.frame_id = frame_id
         CL->>DB: insert_event(frame_id, event) + FTS sync
         CL->>IL: submit(event)
+        CL->>GA: HTTP POST /push (event)
     and Context Pipeline
         CL->>CP: provider.collect(app, window)
         CP-->>CL: list[AdditionalContext] (frame_id=None)
@@ -957,18 +1015,16 @@ sequenceDiagram
     DB-->>RA: search results
     RA-->>IL: Action or None
     IL->>DB: insert_action(action) + FTS sync
+    IL->>GA: HTTP POST /push (action)
 
-    Consumer->>API: GET /search?q=meeting+notes
-    API->>DB: FTS5 MATCH
-    API-->>Consumer: OCR results
+    Note over GA: General Agent evaluates push against context
+    GA->>GA: decide: worth surfacing?
+    GA->>GA: use tools (web search, DB query, etc.)
+    GA->>OV: WebSocket: show_proposal / show_notification
 
-    Consumer->>API: GET /actions?action_type=flag
-    API->>DB: query actions table
-    API-->>Consumer: action results
-
-    Consumer->>API: GET /frames/42
-    API->>FS: read JPEG
-    API-->>Consumer: image/jpeg
+    OV->>GA: HTTP POST /chat (user engages)
+    GA->>GA: respond in conversation context, use tools
+    GA->>OV: WebSocket: conversation response
 ```
 
 
@@ -977,10 +1033,11 @@ sequenceDiagram
 
 1. Screenshot capture and OCR run via `asyncio.to_thread()` to avoid blocking the event loop
 2. ProcessAgents + ContextProviders run concurrently after OCR; both return objects with `frame_id=None` which the capture loop fills in
-3. Events are submitted to IntelligenceLayer via fire-and-forget `submit()`
-4. IntelligenceLayer runs as a separate background task -- ReasoningAgents process events asynchronously, querying the database directly, and never block the capture loop
-5. External sources can push context at any time via `POST /context`
-6. All DB insert methods also write to the corresponding FTS5 index in the same transaction
+3. Events are submitted to IntelligenceLayer via fire-and-forget `submit()`, and also pushed to the General Agent via HTTP
+4. IntelligenceLayer runs as a separate background task -- ReasoningAgents process events asynchronously, querying the database directly, and never block the capture loop. Produced actions are pushed to the General Agent
+5. The General Agent processes pushes from its queue, uses tools to gather additional info, and decides what to surface to the user via the overlay
+6. External sources can push context at any time via `POST /context`
+7. All DB insert methods also write to the corresponding FTS5 index in the same transaction
 
 ---
 
@@ -1041,6 +1098,7 @@ No external OCR binaries needed (Apple Vision is built into macOS). No Tesseract
 | Screenshot analysis | N/A                             | ProcessAgent abstraction produces structured Events                                |
 | External context    | N/A                             | ContextProvider abstraction + POST API for Chrome DevTools, etc.                   |
 | Reasoning / actions | Pipes (markdown agents via CLI) | Intelligence Layer: ReasoningAgents fed Events, query DB directly, produce Actions |
+| User-facing agent   | N/A                             | General Agent: long-running conversational loop with tools, receives pushes from process agents + intelligence layer, surfaces proposals to overlay via WebSocket |
 | DB writes           | WriteQueue mpsc 500-op batches  | Synchronous frame inserts, async lock serialization                                |
 | Video compaction    | FFmpeg MP4 from snapshots       | Not included (JPEG only)                                                           |
 | Audio               | Whisper/Deepgram/cpal           | Not included (screen only)                                                         |

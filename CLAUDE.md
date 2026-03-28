@@ -50,17 +50,17 @@ Glimpse is a macOS-native screen activity capture and intelligence service. It c
 │  └─ Event → ReasoningAgent.reason(event, db) → Action       │
 │     └─ insert_action + actions_fts                          │
 └─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌──────────────────── STORAGE ────────────────────────────────┐
-│  SQLite (WAL mode) with FTS5 virtual tables                 │
-│  Tables: frames, ocr_text, events, context, actions         │
-│  FTS:    ocr_fts, events_fts, context_fts, actions_fts      │
-│  Snapshots: JPEG files under ~/.glimpse/data/               │
-│  Retention: periodic cleanup removes frames older than N days│
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
+                    │                          │
+                    ▼                          ▼
+┌─────────────── STORAGE ──────────┐ ┌──────────── GENERAL AGENT ────────┐
+│  SQLite (WAL) + FTS5             │ │  HTTP server + long-running loop   │
+│  frames, ocr_text, events,       │ │  POST /push ← events + actions    │
+│  context, actions + FTS indexes  │ │  POST /chat ← user messages       │
+│  JPEG files ~/.glimpse/data/     │ │  Uses tools → pushes to overlay   │
+│  Periodic retention cleanup      │ │  Maintains session context        │
+└──────────────────────────────────┘ └──────────────────────────────────┘
+                    │
+                    ▼
 ┌──────────────────── OUTPUT (FastAPI) ───────────────────────┐
 │  /search      — OCR full-text search                        │
 │  /frames/{id} — frame image + metadata + OCR + events       │
@@ -79,6 +79,7 @@ Glimpse is a macOS-native screen activity capture and intelligence service. It c
 | `ProcessAgent` (ABC) | `src/process/process_agent.py` | `GemmaAgent`, `NoOpAgent` |
 | `ReasoningAgent` (ABC) | `src/intelligence/reasoning_agent.py` | (none wired yet) |
 | `ContextProvider` (ABC) | `src/context/context_provider.py` | (none wired yet) |
+| `GeneralAgent` | `src/general_agent/agent.py` | (not implemented yet) |
 
 All three follow a plug-in pattern — add new implementations and register them in `main.py`.
 
