@@ -16,6 +16,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
+from src.general_agent.event_filter import EventFilter
 from src.general_agent.ollama_client import sanitize_response
 from src.general_agent.tools import ToolRegistry
 from src.llm.client import LLMClient
@@ -28,9 +29,6 @@ logger = logging.getLogger(__name__)
 # How many recent items to keep in the sliding context window
 MAX_CONTEXT_ITEMS = 50
 MAX_CONVERSATION_TURNS = 30
-
-# Suppress duplicate notifications within this window (seconds)
-DEDUP_WINDOW_S = 30.0
 
 MAX_TOOL_ROUNDS = 10
 
@@ -93,8 +91,7 @@ class GeneralAgent:
         # Conversation history with the user
         self._conversation: deque[ConversationTurn] = deque(maxlen=MAX_CONVERSATION_TURNS)
 
-        # Track what we've already surfaced to avoid spam
-        self._recent_notifications: deque[tuple[str, float]] = deque(maxlen=100)
+        self._filter = EventFilter()
 
         self._running = False
         self._ws_connection: Any | None = None
@@ -183,16 +180,8 @@ class GeneralAgent:
         if not summary:
             return
 
-        # Dedup: skip if we recently surfaced something very similar
-        if self._is_duplicate(summary):
-            logger.debug("Skipping duplicate: %s", summary[:80])
-            return
-
-        # Decide importance — actions from the intelligence layer are higher signal
-        importance = self._assess_importance(item)
-
-        if importance < 0.3:
-            logger.debug("Skipping low-importance item: %s", summary[:80])
+        should_process, importance = self._filter.should_process(item, summary)
+        if not should_process:
             return
 
         agent_name = item.data.get("agent_name", "")
@@ -205,7 +194,6 @@ class GeneralAgent:
             logger.debug("LLM found nothing noteworthy for %s event", agent_name or "unknown")
             return
 
-        # Push to overlay
         await self._ws_send({
             "type": "show_proposal",
             "text": notification,
@@ -215,7 +203,7 @@ class GeneralAgent:
         if self._voice and self._voice_enabled and importance >= 0.7:
             asyncio.create_task(self._voice.speak(notification))
 
-        self._recent_notifications.append((summary, time.time()))
+        self._filter.record_notification(summary)
         logger.info("Surfaced to overlay: %s", notification[:100])
 
     async def _analyze_screen_context(self, item: PushItem, summary: str) -> str:
@@ -316,36 +304,6 @@ class GeneralAgent:
         elif item.kind == "action":
             return data.get("action_description", "")
         return ""
-
-    def _is_duplicate(self, summary: str) -> bool:
-        now = time.time()
-        normalized = summary.strip().lower()
-        for prev_summary, ts in self._recent_notifications:
-            if now - ts < DEDUP_WINDOW_S and prev_summary.strip().lower() == normalized:
-                return True
-        return False
-
-    def _assess_importance(self, item: PushItem) -> float:
-        """Score 0.0–1.0 based on heuristics. Refine over time."""
-        score = 0.5
-
-        # Actions from reasoning agents are higher signal than raw events
-        if item.kind == "action":
-            score += 0.2
-
-        data = item.data
-
-        # Certain action types are inherently important
-        high_importance_types = {"flag", "escalate", "warn", "alert", "critique"}
-        if data.get("action_type", "").lower() in high_importance_types:
-            score += 0.2
-
-        # Longer summaries tend to carry more substance
-        summary = data.get("summary", "") or data.get("action_description", "")
-        if len(summary) > 100:
-            score += 0.1
-
-        return min(score, 1.0)
 
     async def _enrich(self, item: PushItem) -> str:
         """Use tools to gather additional context for a high-importance item."""
