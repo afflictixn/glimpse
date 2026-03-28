@@ -48,6 +48,8 @@ struct ChatView: View {
                 Image(systemName: showSettings ? "chevron.left" : "gearshape")
                     .font(.system(size: 12))
                     .foregroundColor(.white.opacity(0.6))
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .help(showSettings ? "Back to chat" : "Settings")
@@ -57,6 +59,8 @@ struct ChatView: View {
                     Image(systemName: "arrow.down.right.and.arrow.up.left")
                         .font(.system(size: 12))
                         .foregroundColor(.white.opacity(0.6))
+                        .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .help("Compress to small overlay")
@@ -66,6 +70,8 @@ struct ChatView: View {
                 Image(systemName: "xmark")
                     .font(.system(size: 12))
                     .foregroundColor(.white.opacity(0.6))
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .help("Close (Cmd+Shift+O to reopen)")

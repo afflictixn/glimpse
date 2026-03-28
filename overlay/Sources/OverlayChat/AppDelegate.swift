@@ -156,7 +156,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         floatingOverlayWindow.hidesOnDeactivate = false
         floatingOverlayWindow.animationBehavior = .utilityWindow
 
-        let floatingView = FloatingOverlayView(state: overlayState, viewModel: chatViewModel)
+        let floatingView = FloatingOverlayView(state: overlayState, viewModel: chatViewModel, settings: overlayState.settings)
         let hostingView = NSHostingView(rootView: floatingView)
         hostingView.wantsLayer = true
         hostingView.layer?.cornerRadius = 14

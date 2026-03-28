@@ -98,14 +98,14 @@ final class OverlayState: ObservableObject {
         case .medium: mode = .suggestion
         case .high:   mode = .important
         }
-        voiceService.speak(text)
+        // Voice is handled server-side by GeneralAgent — no overlay-side speak
     }
 
     func handleWarning(text: String) {
         currentSuggestion = text
         modeChangedAt = Date().timeIntervalSinceReferenceDate
         mode = .warning
-        voiceService.speak(text)
+        // Voice is handled server-side by GeneralAgent — no overlay-side speak
     }
 
     func dismissSuggestion() {

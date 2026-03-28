@@ -7,6 +7,7 @@ final class Settings: ObservableObject {
     @Published var voiceEnabled: Bool {
         didSet {
             UserDefaults.standard.set(voiceEnabled, forKey: "voiceEnabled")
+            writeVoiceFile(voiceEnabled)
             syncVoiceToBackend(voiceEnabled)
         }
     }
@@ -17,10 +18,20 @@ final class Settings: ObservableObject {
             "voiceEnabled": true,
         ])
         self.voiceEnabled = defaults.bool(forKey: "voiceEnabled")
-        // Sync initial state to backend on launch
+        writeVoiceFile(self.voiceEnabled)
         syncVoiceToBackend(self.voiceEnabled)
     }
 
+    /// Write voice state to ~/.zexp/voice_enabled — the Python backend reads this
+    /// file before every TTS call, so it works regardless of HTTP sync timing.
+    private func writeVoiceFile(_ enabled: Bool) {
+        let dir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".zexp")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let file = dir.appendingPathComponent("voice_enabled")
+        try? (enabled ? "true" : "false").write(to: file, atomically: true, encoding: .utf8)
+    }
+
+    /// Best-effort HTTP sync — belt-and-suspenders alongside the file.
     private func syncVoiceToBackend(_ enabled: Bool) {
         guard let url = URL(string: "http://localhost:3030/agent/voice") else { return }
         var request = URLRequest(url: url)

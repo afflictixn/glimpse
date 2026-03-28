@@ -17,6 +17,7 @@ import httpx
 logger = logging.getLogger(__name__)
 
 ELEVENLABS_TTS_URL = "https://api.elevenlabs.io/v1/text-to-speech"
+VOICE_ENABLED_FILE = Path.home() / ".zexp" / "voice_enabled"
 
 
 class VoiceClient:
@@ -55,6 +56,14 @@ class VoiceClient:
         response.raise_for_status()
         return response.content
 
+    @staticmethod
+    def is_enabled() -> bool:
+        """Check the shared voice_enabled file written by the overlay."""
+        try:
+            return VOICE_ENABLED_FILE.read_text().strip().lower() not in ("false", "0", "no")
+        except (FileNotFoundError, OSError):
+            return True  # default to enabled if file doesn't exist yet
+
     async def speak(self, text: str) -> None:
         """Synthesize text and play it through the system speakers.
 
@@ -62,6 +71,10 @@ class VoiceClient:
         don't overlap.
         """
         if not text or not text.strip():
+            return
+
+        if not self.is_enabled():
+            logger.debug("Voice disabled via %s — skipping TTS", VOICE_ENABLED_FILE)
             return
 
         try:

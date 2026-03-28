@@ -67,6 +67,8 @@ async def speak(req: SpeakRequest, request: Request) -> dict:
             status_code=503,
             content={"error": "TTS not enabled — set ELEVENLABS_API_KEY in .env"},
         )
+    if not agent._voice_enabled:
+        return {"status": "skipped", "reason": "voice disabled"}
     await agent._voice.speak(req.text)
     return {"status": "spoken", "text": req.text}
 
