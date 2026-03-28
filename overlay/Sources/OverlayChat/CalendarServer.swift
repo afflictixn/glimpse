@@ -20,6 +20,21 @@ final class CalendarServer {
         return "\(home)/Library/Messages/chat.db"
     }()
 
+    private let mailDBPath: String = {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let base = "\(home)/Library/Mail"
+        // Find the latest V* directory
+        let fm = FileManager.default
+        if let contents = try? fm.contentsOfDirectory(atPath: base) {
+            let versions = contents.filter { $0.hasPrefix("V") }.sorted().reversed()
+            for v in versions {
+                let path = "\(base)/\(v)/MailData/Envelope Index"
+                if fm.fileExists(atPath: path) { return path }
+            }
+        }
+        return "\(base)/V10/MailData/Envelope Index"
+    }()
+
     func start() {
         requestCalendarAccess()
         startListener()
@@ -103,10 +118,14 @@ final class CalendarServer {
                 response = self.handleIMessageSearch(raw)
             } else if raw.contains("/imessage/conversation") {
                 response = self.handleIMessageConversation(raw)
+            } else if raw.contains("/mail/recent") {
+                response = self.handleMailRecent(raw)
+            } else if raw.contains("/mail/search") {
+                response = self.handleMailSearch(raw)
             } else if raw.contains("/calendar") {
                 response = self.handleCalendar(raw)
             } else {
-                response = "{\"error\": \"Unknown endpoint. Use /calendar, /imessage/recent, /imessage/search, or /imessage/conversation\"}"
+                response = "{\"error\": \"Unknown endpoint.\"}"
             }
 
             let httpResponse = self.buildHTTPResponse(body: response)
@@ -171,7 +190,7 @@ final class CalendarServer {
             LIMIT \(limit)
         """
 
-        return queryMessageDB(sql)
+        return querySQLiteDB(sql)
     }
 
     private func handleIMessageSearch(_ raw: String) -> String {
@@ -197,7 +216,7 @@ final class CalendarServer {
             LIMIT \(limit)
         """
 
-        return queryMessageDB(sql)
+        return querySQLiteDB(sql)
     }
 
     private func handleIMessageConversation(_ raw: String) -> String {
@@ -227,15 +246,16 @@ final class CalendarServer {
             LIMIT \(limit)
         """
 
-        return queryMessageDB(sql)
+        return querySQLiteDB(sql)
     }
 
-    private func queryMessageDB(_ sql: String) -> String {
+    private func querySQLiteDB(_ sql: String, dbPath: String? = nil, errorHint: String = "Grant Full Disk Access to GlimpseOverlay.") -> String {
+        let path = dbPath ?? chatDBPath
         var db: OpaquePointer?
-        guard sqlite3_open_v2(chatDBPath, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else {
+        guard sqlite3_open_v2(path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else {
             let err = db.flatMap { String(cString: sqlite3_errmsg($0)) } ?? "unknown"
             sqlite3_close(db)
-            return "{\"error\": \"Cannot open Messages database. Grant Full Disk Access to GlimpseOverlay in System Settings > Privacy > Full Disk Access. (\(err))\"}"
+            return "{\"error\": \"Cannot open database. \(errorHint) (\(err))\"}"
         }
         defer { sqlite3_close(db) }
 
@@ -271,6 +291,62 @@ final class CalendarServer {
         }
 
         return toJSON(results)
+    }
+
+    // MARK: - Mail Handlers
+
+    private func handleMailRecent(_ raw: String) -> String {
+        let limit = min(parseIntParam(raw, name: "limit", fallback: 10), 50)
+
+        let sql = """
+            SELECT
+                s.subject,
+                a.address AS sender,
+                a.comment AS sender_name,
+                datetime(m.date_received, 'unixepoch', 'localtime') AS received,
+                m.read AS is_read,
+                substr(m.summary, 1, 300) AS preview
+            FROM messages m
+            LEFT JOIN subjects s ON m.subject = s.ROWID
+            LEFT JOIN addresses a ON m.sender = a.ROWID
+            WHERE m.date_received IS NOT NULL
+            ORDER BY m.date_received DESC
+            LIMIT \(limit)
+        """
+
+        return querySQLiteDB(sql, dbPath: mailDBPath, errorHint: "Grant Full Disk Access to GlimpseOverlay for Mail access.")
+    }
+
+    private func handleMailSearch(_ raw: String) -> String {
+        let query = parseStringParam(raw, name: "q") ?? ""
+        let limit = min(parseIntParam(raw, name: "limit", fallback: 20), 100)
+
+        guard !query.isEmpty else {
+            return "{\"error\": \"Missing required parameter: q\"}"
+        }
+
+        let escaped = query.replacingOccurrences(of: "'", with: "''")
+
+        let sql = """
+            SELECT
+                s.subject,
+                a.address AS sender,
+                a.comment AS sender_name,
+                datetime(m.date_received, 'unixepoch', 'localtime') AS received,
+                m.read AS is_read,
+                substr(m.summary, 1, 300) AS preview
+            FROM messages m
+            LEFT JOIN subjects s ON m.subject = s.ROWID
+            LEFT JOIN addresses a ON m.sender = a.ROWID
+            WHERE s.subject LIKE '%\(escaped)%'
+               OR m.summary LIKE '%\(escaped)%'
+               OR a.address LIKE '%\(escaped)%'
+               OR a.comment LIKE '%\(escaped)%'
+            ORDER BY m.date_received DESC
+            LIMIT \(limit)
+        """
+
+        return querySQLiteDB(sql, dbPath: mailDBPath, errorHint: "Grant Full Disk Access to GlimpseOverlay for Mail access.")
     }
 
     // MARK: - Helpers

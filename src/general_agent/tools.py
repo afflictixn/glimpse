@@ -265,6 +265,34 @@ class ToolRegistry:
 
         self.register(RegisteredTool(
             spec=ToolSpec(
+                name="mail_recent",
+                description=(
+                    "Get recent emails from Apple Mail. Returns subject, sender, "
+                    "date received, read status, and a preview of each email."
+                ),
+                parameters={
+                    "limit": "Max emails to return (default 10)",
+                },
+            ),
+            fn=self._mail_recent,
+        ))
+        self.register(RegisteredTool(
+            spec=ToolSpec(
+                name="mail_search",
+                description=(
+                    "Search Apple Mail by keyword. Searches subject lines, sender "
+                    "addresses/names, and email body previews."
+                ),
+                parameters={
+                    "query": "Search query string",
+                    "limit": "Max emails to return (default 20)",
+                },
+            ),
+            fn=self._mail_search,
+        ))
+
+        self.register(RegisteredTool(
+            spec=ToolSpec(
                 name="reddit_subreddit",
                 description=(
                     "Get top/hot/new posts from a subreddit. No auth needed. "
@@ -591,6 +619,40 @@ class ToolRegistry:
         except Exception as e:
             logger.error("social_search failed: %s", e)
             return json.dumps({"error": f"Social search failed: {e}"})
+
+    # ── Mail (via overlay server on port 9322) ─────────────────
+
+    async def _mail_recent(self, limit: str = "10") -> str:
+        import httpx
+
+        logger.info("mail_recent called: limit=%s", limit)
+        n = min(int(limit), 50)
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(
+                    "http://localhost:9322/mail/recent",
+                    params={"limit": n},
+                )
+                return resp.text
+        except Exception as e:
+            logger.error("mail_recent failed: %s", e)
+            return json.dumps({"error": f"Mail unavailable. Make sure the Glimpse overlay is running. ({e})"})
+
+    async def _mail_search(self, query: str = "", limit: str = "20") -> str:
+        import httpx
+
+        logger.info("mail_search called: q=%s", query)
+        n = min(int(limit), 100)
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(
+                    "http://localhost:9322/mail/search",
+                    params={"q": query, "limit": n},
+                )
+                return resp.text
+        except Exception as e:
+            logger.error("mail_search failed: %s", e)
+            return json.dumps({"error": f"Mail search unavailable. ({e})"})
 
     # ── Reddit (public JSON API, no auth) ─────────────────────
 
