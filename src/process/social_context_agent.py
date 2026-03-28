@@ -65,7 +65,9 @@ class SocialContextAgent(ProcessAgent):
         if not ocr_text or len(ocr_text.strip()) < 20:
             return None
 
-        # Extract contact names from OCR text using small local LLM
+        if not self._is_messaging_app(app_name, window_name):
+            return None
+
         names = await self._extract_names(ocr_text)
         if not names:
             return None
