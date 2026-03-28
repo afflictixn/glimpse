@@ -15,38 +15,47 @@ from src.storage.models import AppType, Event
 
 logger = logging.getLogger(__name__)
 
-_APP_TYPES = ", ".join(f'"{v.value}"' for v in AppType)
-
-_SYSTEM_PROMPT = f"""\
+_SYSTEM_PROMPT = """\
 You are a screen activity analyzer. Given a screenshot (and optionally OCR text), \
-produce a JSON object with these fields:
-- "app_type": one of {_APP_TYPES}
-- "summary": one-sentence description of what the user is doing
-- "metadata": object with any additional observations (e.g. {{"url": "...", \
-"language": "python", "topic": "..."}})
+produce a JSON object describing the user's current activity. \
+Keep summary to one sentence. Include 2-3 key observations in metadata."""
 
-Respond ONLY with valid JSON, no markdown fences or extra text."""
+_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "app_type": {
+            "type": "string",
+            "enum": [v.value for v in AppType],
+        },
+        "summary": {"type": "string"},
+        "metadata": {"type": "object"},
+    },
+    "required": ["app_type", "summary"],
+}
 
 
 class GemmaAgent(ProcessAgent):
-    """ProcessAgent that sends screenshots to a local Gemma 3 12B via Ollama."""
+    """Model-agnostic Ollama vision ProcessAgent (works with gemma3, qwen3-vl, etc.)."""
 
     def __init__(
         self,
         *,
         ollama_base_url: str = "http://localhost:11434",
-        model: str = "gemma3:12b",
+        model: str = "gemma3:4b",
         include_ocr: bool = False,
         timeout_s: int = 30,
+        max_image_width: int = 960,
     ) -> None:
         self._base_url = ollama_base_url.rstrip("/")
         self._model = model
         self._include_ocr = include_ocr
         self._timeout_s = timeout_s
+        self._max_width = max_image_width
 
     @property
     def name(self) -> str:
-        return "gemma"
+        prefix = self._model.split(":")[0].replace("-", "_")
+        return prefix
 
     async def process(
         self,
@@ -81,10 +90,15 @@ class GemmaAgent(ProcessAgent):
             parts.append(f"OCR text:\n{ocr_text[:2000]}")
         return "\n".join(parts)
 
-    @staticmethod
-    def _encode_image(image: Image.Image) -> str:
-        buf = io.BytesIO()
+    def _encode_image(self, image: Image.Image) -> str:
         rgb = image.convert("RGB") if image.mode != "RGB" else image
+        if self._max_width and rgb.width > self._max_width:
+            ratio = self._max_width / rgb.width
+            rgb = rgb.resize(
+                (self._max_width, int(rgb.height * ratio)),
+                Image.Resampling.LANCZOS,
+            )
+        buf = io.BytesIO()
         rgb.save(buf, format="JPEG", quality=70)
         return base64.b64encode(buf.getvalue()).decode()
 
@@ -95,6 +109,7 @@ class GemmaAgent(ProcessAgent):
             "system": _SYSTEM_PROMPT,
             "images": [image_b64],
             "stream": False,
+            "format": _OUTPUT_SCHEMA,
             "options": {"temperature": 0.1},
         }).encode()
 
@@ -110,33 +125,25 @@ class GemmaAgent(ProcessAgent):
 
         return data.get("response", "")
 
-    @staticmethod
-    def _coerce_app_type(raw: str) -> AppType:
-        try:
-            return AppType(raw.lower())
-        except ValueError:
-            return AppType.OTHER
-
     def _parse_response(self, text: str) -> Event | None:
-        cleaned = text.strip()
-        if cleaned.startswith("```"):
-            lines = cleaned.split("\n")
-            lines = [ln for ln in lines if not ln.strip().startswith("```")]
-            cleaned = "\n".join(lines)
-
         try:
-            parsed = json.loads(cleaned)
+            parsed = json.loads(text)
         except json.JSONDecodeError:
-            logger.warning("Failed to parse Gemma JSON response: %.200s", text)
+            logger.warning("Failed to parse vision model JSON response: %.200s", text)
             return Event(
                 agent_name=self.name,
                 app_type=AppType.OTHER,
                 summary=text[:500],
             )
 
+        try:
+            app_type = AppType(parsed.get("app_type", "other"))
+        except ValueError:
+            app_type = AppType.OTHER
+
         return Event(
             agent_name=self.name,
-            app_type=self._coerce_app_type(parsed.get("app_type", "other")),
+            app_type=app_type,
             summary=parsed.get("summary", ""),
             metadata=parsed.get("metadata", {}),
         )

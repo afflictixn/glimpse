@@ -36,6 +36,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--skip-gemma", action="store_true", help="Skip the Ollama/Gemma call")
     p.add_argument("--ollama-url", type=str, default="http://localhost:11434")
     p.add_argument("--ollama-model", type=str, default="gemma3:12b")
+    p.add_argument("--max-image-width", type=int, default=960, help="Max image width (0=no resize)")
     p.add_argument("--keep-snapshots", action="store_true", help="Keep snapshot files after run")
     return p.parse_args()
 
@@ -164,12 +165,14 @@ async def main() -> None:
         gemma = GemmaAgent(
             ollama_base_url=args.ollama_url,
             model=args.ollama_model,
+            max_image_width=args.max_image_width,
         )
 
     browser = BrowserContentAgent()
 
     print(f"Capture Pipeline Benchmark ({args.runs} runs)")
-    print(f"  Gemma: {'SKIP' if args.skip_gemma else f'{args.ollama_model} @ {args.ollama_url}'}")
+    print(f"  Model: {'SKIP' if args.skip_gemma else f'{args.ollama_model} @ {args.ollama_url}'}")
+    print(f"  Max image width: {args.max_image_width or 'no resize'}")
     print(f"  Temp dir: {tmp_dir}")
 
     results: list[RunResult] = []
