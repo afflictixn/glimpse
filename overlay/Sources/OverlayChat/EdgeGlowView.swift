@@ -68,7 +68,6 @@ struct EdgeGlowView: View {
         case .hidden:     return 0.0
         case .suggestion: return 0.7
         case .excited:    return 0.85
-        case .important:  return 0.9
         case .warning:    return 1.0
         }
     }
