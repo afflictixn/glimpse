@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
+from dataclasses import dataclass, field
 
 from pydantic import BaseModel
 
@@ -81,3 +83,50 @@ def screen_activity_to_event(activity: ScreenActivity, *, agent_name: str) -> Ev
         summary=activity.summary,
         metadata=dict(activity.metadata),
     )
+
+
+# ── Token counting ────────────────────────────────────────────
+
+
+@dataclass
+class _ModelTokens:
+    input_tokens: int = 0
+    output_tokens: int = 0
+    calls: int = 0
+
+
+class LlmTokenCounter:
+    """Thread-safe accumulator of input/output token counts keyed by model name."""
+
+    def __init__(self) -> None:
+        self._counts: dict[str, _ModelTokens] = {}
+        self._lock = threading.Lock()
+
+    def record(self, model: str, *, input_tokens: int, output_tokens: int) -> None:
+        with self._lock:
+            if model not in self._counts:
+                self._counts[model] = _ModelTokens()
+            entry = self._counts[model]
+            entry.input_tokens += input_tokens
+            entry.output_tokens += output_tokens
+            entry.calls += 1
+
+    def get(self, model: str) -> dict[str, int]:
+        with self._lock:
+            entry = self._counts.get(model)
+            if entry is None:
+                return {"input_tokens": 0, "output_tokens": 0, "calls": 0}
+            return {
+                "input_tokens": entry.input_tokens,
+                "output_tokens": entry.output_tokens,
+                "calls": entry.calls,
+            }
+
+    @property
+    def totals(self) -> dict[str, dict[str, int]]:
+        with self._lock:
+            return {model: self.get(model) for model in self._counts}
+
+    def reset(self) -> None:
+        with self._lock:
+            self._counts.clear()

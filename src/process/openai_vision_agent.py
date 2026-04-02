@@ -12,13 +12,22 @@ from PIL import Image
 from src.process.process_agent import ProcessAgent
 from src.process.vision_shared import (
     VISION_SYSTEM_PROMPT,
+    LlmTokenCounter,
     ScreenActivity,
     build_vision_prompt,
     screen_activity_to_event,
 )
-from src.storage.models import Event
+from src.storage.models import AppType, Event
 
 logger = logging.getLogger(__name__)
+
+_OPENAI_SYSTEM_PROMPT = (
+    VISION_SYSTEM_PROMPT
+    + "\n\nRespond with a JSON object containing exactly these fields:\n"
+    + '- "app_type": one of ' + ", ".join(f'"{v.value}"' for v in AppType) + "\n"
+    + '- "summary": one-sentence description\n'
+    + '- "metadata": object with string key/value observations'
+)
 
 
 class OpenAIVisionAgent(ProcessAgent):
@@ -33,6 +42,7 @@ class OpenAIVisionAgent(ProcessAgent):
         image_detail: str = "low",
         api_key: str | None = None,
         timeout_s: float = 5.0,
+        token_counter: LlmTokenCounter | None = None,
     ) -> None:
         self._model = model
         self._include_ocr = include_ocr
@@ -40,6 +50,7 @@ class OpenAIVisionAgent(ProcessAgent):
         self._detail = image_detail
         self._timeout = timeout_s
         self._client = AsyncOpenAI(api_key=api_key)
+        self._token_counter = token_counter
 
     @property
     def name(self) -> str:
@@ -83,7 +94,7 @@ class OpenAIVisionAgent(ProcessAgent):
         self, image_b64: str, prompt: str,
     ) -> ScreenActivity | None:
         input_messages = [
-            {"role": "system", "content": VISION_SYSTEM_PROMPT},
+            {"role": "system", "content": _OPENAI_SYSTEM_PROMPT},
             {
                 "role": "user",
                 "content": [
@@ -98,18 +109,29 @@ class OpenAIVisionAgent(ProcessAgent):
         ]
 
         response = await asyncio.wait_for(
-            self._client.responses.parse(
+            self._client.responses.create(
                 model=self._model,
                 input=input_messages,
-                text_format=ScreenActivity,
+                text={"format": {"type": "json_object"}},
                 temperature=0.2,
             ),
             timeout=self._timeout,
         )
 
-        parsed = response.output_parsed
-        if parsed is None:
-            raw = response.output_text or ""
-            logger.warning("OpenAI structured parse returned None, falling back: %.200s", raw)
+        if self._token_counter and response.usage:
+            self._token_counter.record(
+                self._model,
+                input_tokens=response.usage.input_tokens,
+                output_tokens=response.usage.output_tokens,
+            )
+
+        raw = response.output_text
+        if not raw:
+            logger.warning("OpenAI returned empty response")
             return None
-        return parsed
+
+        try:
+            return ScreenActivity.model_validate_json(raw)
+        except Exception:
+            logger.warning("Failed to validate OpenAI response as ScreenActivity: %.200s", raw)
+            return None

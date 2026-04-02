@@ -12,6 +12,7 @@ from PIL import Image
 from src.process.process_agent import ProcessAgent
 from src.process.vision_shared import (
     VISION_SYSTEM_PROMPT,
+    LlmTokenCounter,
     build_vision_prompt,
     parse_vision_response,
 )
@@ -43,11 +44,13 @@ class GeminiVisionAgent(ProcessAgent):
         include_ocr: bool = False,
         max_image_width: int = 960,
         api_key: str | None = None,
+        token_counter: LlmTokenCounter | None = None,
     ) -> None:
         self._model = model
         self._include_ocr = include_ocr
         self._max_width = max_image_width
         self._client = genai.Client(api_key=api_key)
+        self._token_counter = token_counter
 
     @property
     def name(self) -> str:
@@ -106,5 +109,12 @@ class GeminiVisionAgent(ProcessAgent):
             ),
             timeout=10,
         )
+
+        if self._token_counter and response.usage_metadata:
+            self._token_counter.record(
+                self._model,
+                input_tokens=response.usage_metadata.prompt_token_count or 0,
+                output_tokens=response.usage_metadata.candidates_token_count or 0,
+            )
 
         return response.text or ""
