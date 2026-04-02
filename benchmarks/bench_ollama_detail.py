@@ -1,12 +1,12 @@
-"""Deep-dive benchmark into the Ollama/Gemma call.
+"""Deep-dive benchmark into the Ollama vision model call.
 
 Captures a real screenshot, tests multiple resolutions and JPEG qualities,
 and saves all inputs/outputs for inspection.
 
 Usage:
-    ./venv/bin/python -m benchmarks.bench_ollama_detail
-    ./venv/bin/python -m benchmarks.bench_ollama_detail --resolutions 1920 1280 --qualities 70 40
-    ./venv/bin/python -m benchmarks.bench_ollama_detail --from-file /path/to/screenshot.jpg
+    .venv/bin/python -m benchmarks.bench_ollama_detail
+    .venv/bin/python -m benchmarks.bench_ollama_detail --resolutions 1920 1280 --qualities 70 40
+    .venv/bin/python -m benchmarks.bench_ollama_detail --from-file /path/to/screenshot.jpg
 """
 from __future__ import annotations
 
@@ -14,30 +14,24 @@ import argparse
 import base64
 import io
 import json
-import os
 import time
 import urllib.request
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from PIL import Image
 
 from benchmarks.utils import Timer, fmt
+from src.config import Settings
+from src.process.vision_shared import VISION_SYSTEM_PROMPT
+
+_DEFAULTS = Settings()
 
 DEFAULT_RESOLUTIONS = [0, 1920, 1280, 960]  # 0 = original
 DEFAULT_QUALITIES = [70, 40]
-OLLAMA_URL = "http://localhost:11434"
-MODEL = "gemma3:12b"
-
-SYSTEM_PROMPT = """\
-You are a screen activity analyzer. Given a screenshot (and optionally OCR text), \
-produce a JSON object with these fields:
-- "app_type": one of "browser", "terminal", "ide", "other"
-- "summary": one-sentence description of what the user is doing
-- "metadata": object with any additional observations
-
-Respond ONLY with valid JSON, no markdown fences or extra text."""
+OLLAMA_URL = _DEFAULTS.ollama_base_url
+MODEL = _DEFAULTS.ollama_model
 
 
 @dataclass
@@ -100,7 +94,7 @@ def call_ollama(
     payload = json.dumps({
         "model": model,
         "prompt": prompt,
-        "system": SYSTEM_PROMPT,
+        "system": VISION_SYSTEM_PROMPT,
         "images": [image_b64],
         "stream": False,
         "options": {"temperature": 0.1},
@@ -262,7 +256,7 @@ def save_artifacts(
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Deep-dive Ollama/Gemma call benchmark")
+    p = argparse.ArgumentParser(description="Deep-dive Ollama vision model benchmark")
     p.add_argument(
         "--resolutions", type=int, nargs="+", default=DEFAULT_RESOLUTIONS,
         help="Max widths to test (0 = original). Default: 0 1920 1280 960",
@@ -300,7 +294,7 @@ def main() -> None:
     qualities = args.qualities
     total_variants = len(resolutions) * len(qualities)
 
-    print(f"\nOllama Detail Benchmark")
+    print("\nOllama Detail Benchmark")
     print(f"  Model: {args.ollama_model} @ {args.ollama_url}")
     print(f"  Image: {image.width}x{image.height}")
     print(f"  Resolutions: {resolutions}")
