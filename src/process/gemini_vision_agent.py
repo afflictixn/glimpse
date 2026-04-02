@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 import io
-import json
 import logging
 
 from google import genai
@@ -11,14 +10,14 @@ from google.genai import types as gtypes
 from PIL import Image
 
 from src.process.process_agent import ProcessAgent
+from src.process.vision_shared import (
+    VISION_SYSTEM_PROMPT,
+    build_vision_prompt,
+    parse_vision_response,
+)
 from src.storage.models import AppType, Event
 
 logger = logging.getLogger(__name__)
-
-_SYSTEM_PROMPT = """\
-You are a screen activity analyzer. Given a screenshot (and optionally OCR text), \
-produce a JSON object describing the user's current activity. \
-Keep summary to one sentence. Include 2-3 key observations in metadata."""
 
 _RESPONSE_SCHEMA = gtypes.Schema(
     type="OBJECT",
@@ -61,7 +60,9 @@ class GeminiVisionAgent(ProcessAgent):
         app_name: str | None,
         window_name: str | None,
     ) -> Event | None:
-        prompt = self._build_prompt(ocr_text, app_name, window_name)
+        prompt = build_vision_prompt(
+            ocr_text, app_name, window_name, include_ocr=self._include_ocr,
+        )
         image_bytes = await asyncio.to_thread(self._encode_image, image)
 
         try:
@@ -70,22 +71,7 @@ class GeminiVisionAgent(ProcessAgent):
             logger.error("Gemini vision request failed", exc_info=True)
             return None
 
-        return self._parse_response(raw)
-
-    def _build_prompt(
-        self,
-        ocr_text: str,
-        app_name: str | None,
-        window_name: str | None,
-    ) -> str:
-        parts = ["Analyze this screenshot."]
-        if app_name:
-            parts.append(f"Active app: {app_name}")
-        if window_name:
-            parts.append(f"Window: {window_name}")
-        if self._include_ocr and ocr_text:
-            parts.append(f"OCR text:\n{ocr_text[:2000]}")
-        return "\n".join(parts)
+        return parse_vision_response(raw, agent_name=self.name)
 
     def _encode_image(self, image: Image.Image) -> bytes:
         rgb = image.convert("RGB") if image.mode != "RGB" else image
@@ -106,7 +92,7 @@ class GeminiVisionAgent(ProcessAgent):
         text_part = gtypes.Part(text=prompt)
 
         config = gtypes.GenerateContentConfig(
-            system_instruction=_SYSTEM_PROMPT,
+            system_instruction=VISION_SYSTEM_PROMPT,
             temperature=0.2,
             response_mime_type="application/json",
             response_schema=_RESPONSE_SCHEMA,
@@ -122,32 +108,3 @@ class GeminiVisionAgent(ProcessAgent):
         )
 
         return response.text or ""
-
-    def _parse_response(self, text: str) -> Event | None:
-        cleaned = text.strip()
-        if cleaned.startswith("```"):
-            lines = cleaned.split("\n")
-            lines = [ln for ln in lines if not ln.strip().startswith("```")]
-            cleaned = "\n".join(lines)
-
-        try:
-            parsed = json.loads(cleaned)
-        except json.JSONDecodeError:
-            logger.warning("Failed to parse Gemini vision JSON: %.200s", text)
-            return Event(
-                agent_name=self.name,
-                app_type=AppType.OTHER,
-                summary=text[:500],
-            )
-
-        try:
-            app_type = AppType(parsed.get("app_type", "other"))
-        except ValueError:
-            app_type = AppType.OTHER
-
-        return Event(
-            agent_name=self.name,
-            app_type=app_type,
-            summary=parsed.get("summary", ""),
-            metadata=parsed.get("metadata", {}),
-        )

@@ -24,6 +24,7 @@ IMPORTANCE_THRESHOLD = 0.5
 _CONTEXT_COOLDOWNS: dict[str, float] = {
     "gemma3": 120.0,
     "gemini_vision": 120.0,
+    "openai_vision": 120.0,
 }
 _DEFAULT_CONTEXT_COOLDOWN = 90.0
 
@@ -147,7 +148,7 @@ class EventFilter:
         if agent == "browser_content":
             score += 0.3
 
-        if agent.startswith("gemma") or agent == "gemini_vision":
+        if agent.startswith("gemma") or agent in ("gemini_vision", "openai_vision"):
             score += 0.1
 
         summary = data.get("summary", "") or data.get("action_description", "")

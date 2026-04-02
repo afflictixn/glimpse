@@ -30,8 +30,11 @@ class Settings:
     cleanup_interval_hours: int = 1
 
     # Vision process agent
-    vision_provider: str = "gemini"  # "gemini" or "ollama"
+    vision_provider: str = "gemini"  # "gemini", "openai", or "ollama"
     gemini_vision_model: str = "gemini-3-flash-preview"
+    openai_vision_model: str = "gpt-5.4-nano"
+    openai_image_detail: str = "low"
+    openai_vision_timeout_s: float = 5.0
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "gemma3:4b"
     include_ocr: bool = False
