@@ -23,7 +23,6 @@ from benchmarks.utils import RunResult, StepTiming, Timer, print_run, print_summ
 from src.capture.screenshot import capture_screen, get_focused_app
 from src.config import Settings
 from src.ocr.apple_vision import perform_ocr
-from src.process.browser_content_agent import BrowserContentAgent
 from src.process.gemini_vision_agent import GeminiVisionAgent
 from src.process.gemma_agent import GemmaAgent
 from src.process.openai_vision_agent import OpenAIVisionAgent
@@ -87,7 +86,6 @@ async def run_once(
     db: DatabaseManager,
     writer: SnapshotWriter,
     vision_agent: ProcessAgent | None,
-    browser: BrowserContentAgent,
 ) -> RunResult:
     result = RunResult(run_number=run_num)
 
@@ -139,8 +137,6 @@ async def run_once(
     if vision_agent is not None:
         agents_to_run.append(vision_agent)
         agent_names.append(vision_agent.name)
-    agents_to_run.append(browser)
-    agent_names.append(browser.name)
 
     with Timer("agents_parallel") as t_parallel:
         agent_timings: list[StepTiming] = []
@@ -196,8 +192,6 @@ async def main() -> None:
     if not args.skip_vision:
         vision_agent = create_vision_agent(args)
 
-    browser = BrowserContentAgent()
-
     print(f"Capture Pipeline Benchmark ({args.runs} runs)")
     print(f"  Vision: {describe_vision_agent(args)}")
     print(f"  Max image width: {args.max_image_width or 'no resize'}")
@@ -205,7 +199,7 @@ async def main() -> None:
 
     results: list[RunResult] = []
     for i in range(1, args.runs + 1):
-        r = await run_once(i, db, writer, vision_agent, browser)
+        r = await run_once(i, db, writer, vision_agent)
         print_run(r)
         results.append(r)
 

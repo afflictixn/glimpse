@@ -145,9 +145,6 @@ class EventFilter:
         if data.get("action_type", "").lower() in _HIGH_SIGNAL_ACTION_TYPES:
             score += 0.3
 
-        if agent == "browser_content":
-            score += 0.3
-
         if agent.startswith("gemma") or agent in ("gemini_vision", "openai_vision"):
             score += 0.1
 

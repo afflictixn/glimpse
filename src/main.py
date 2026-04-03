@@ -19,9 +19,7 @@ from src.general_agent.tools import ToolRegistry
 from src.general_agent.ws_manager import ConnectionManager
 from src.llm import create_llm_client
 from src.intelligence.intelligence_layer import IntelligenceLayer
-from src.intelligence.critique_agent import CritiqueReasoningAgent
 from src.intelligence.presentation_critique_agent import PresentationCritiqueAgent
-from src.process.browser_content_agent import BrowserContentAgent
 from src.process.gemini_vision_agent import GeminiVisionAgent
 from src.process.gemma_agent import GemmaAgent
 from src.process.openai_vision_agent import OpenAIVisionAgent
@@ -107,7 +105,6 @@ async def run(settings: Settings) -> None:
 
     process_agents: list[ProcessAgent] = [
         vision_agent,
-        BrowserContentAgent(),
     ]
     context_providers: list[ContextProvider] = []
 
@@ -126,7 +123,6 @@ async def run(settings: Settings) -> None:
     ws_manager = ConnectionManager()
 
     reasoning_agents: list[ReasoningAgent] = [
-        CritiqueReasoningAgent(llm=llm_client),
         PresentationCritiqueAgent(model=settings.llm_model),
     ]
     general_agent = GeneralAgent(
