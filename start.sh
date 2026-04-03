@@ -93,18 +93,23 @@ fi
 
 echo -e "${GREEN}Starting Z Exp...${NC}"
 
-# 1. Ollama
-if curl -s http://localhost:11434/api/tags > /dev/null 2>&1; then
-    echo -e "  ${GREEN}✓${NC} Ollama already running"
-else
-    echo -e "  ${YELLOW}→${NC} Starting Ollama..."
-    ollama serve > /dev/null 2>&1 &
-    sleep 3
+# 1. Ollama (only needed for ollama vision provider)
+VISION_PROVIDER=$(python -c "from src.config import Settings; print(Settings().vision_provider)" 2>/dev/null || echo "unknown")
+if [ "$VISION_PROVIDER" = "ollama" ]; then
     if curl -s http://localhost:11434/api/tags > /dev/null 2>&1; then
-        echo -e "  ${GREEN}✓${NC} Ollama started"
+        echo -e "  ${GREEN}✓${NC} Ollama already running"
     else
-        echo -e "  ${RED}✗${NC} Ollama failed to start"
+        echo -e "  ${YELLOW}→${NC} Starting Ollama..."
+        ollama serve > /dev/null 2>&1 &
+        sleep 3
+        if curl -s http://localhost:11434/api/tags > /dev/null 2>&1; then
+            echo -e "  ${GREEN}✓${NC} Ollama started"
+        else
+            echo -e "  ${RED}✗${NC} Ollama failed to start"
+        fi
     fi
+else
+    echo -e "  ${YELLOW}–${NC} Ollama skipped (vision_provider=${VISION_PROVIDER})"
 fi
 
 # 2. Swift overlay (bundled .app for macOS permissions)

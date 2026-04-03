@@ -30,22 +30,23 @@ class Settings:
     cleanup_interval_hours: int = 1
 
     # Vision process agent
-    vision_provider: str = "gemini"  # "gemini", "openai", or "ollama"
+    vision_provider: str = "openai"  # "gemini", "openai", or "ollama"
     gemini_vision_model: str = "gemini-3-flash-preview"
     openai_vision_model: str = "gpt-5.4-nano"
     openai_image_detail: str = "low"
-    openai_vision_timeout_s: float = 5.0
+    openai_vision_timeout_s: float = 10.0
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "gemma3:4b"
     include_ocr: bool = False
     ollama_timeout_s: int = 30
     ollama_max_image_width: int = 960
-    # LLM
-    llm_provider: str = "gemini"
-    llm_model: str = "gemini-3-flash-preview"
+    # LLM (general agent)
+    llm_provider: str = "openai"  # "openai" or "gemini"
+    llm_model: str = "gpt-5.4-mini"
+    llm_reasoning_effort: str | None = "medium"  # None, "low", "medium", "high"
 
     # General agent
-    importance_filter_enabled: bool = True
+    importance_filter_enabled: bool = False
 
     # ElevenLabs TTS
     elevenlabs_api_key: str = field(default_factory=lambda: os.getenv("ELEVENLABS_API_KEY", ""))

@@ -17,17 +17,20 @@ class WindowInfo:
     on_screen: bool
 
 
-def capture_screen(monitor_id: int = 0) -> Image.Image:
+def capture_screen() -> Image.Image:
+    """Capture the main display (the one with the menu bar)."""
     from Quartz import (
-        CGRectInfinite,
+        CGDisplayBounds,
+        CGMainDisplayID,
         CGWindowListCreateImage,
         kCGWindowImageDefault,
         kCGWindowListOptionOnScreenOnly,
     )
     from AppKit import NSBitmapImageRep
 
+    main_rect = CGDisplayBounds(CGMainDisplayID())
     cg_image = CGWindowListCreateImage(
-        CGRectInfinite,
+        main_rect,
         kCGWindowListOptionOnScreenOnly,
         0,
         kCGWindowImageDefault,

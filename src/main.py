@@ -54,6 +54,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-image-width", type=int, default=_DEFAULTS.ollama_max_image_width, help="Max image width sent to Ollama vision model")
     parser.add_argument("--llm-provider", type=str, default=_DEFAULTS.llm_provider, help="LLM provider: openai or gemini")
     parser.add_argument("--llm-model", type=str, default=_DEFAULTS.llm_model, help="LLM model name")
+    parser.add_argument("--llm-reasoning-effort", type=str, default=_DEFAULTS.llm_reasoning_effort, help="Reasoning effort: low, medium, high, or none to disable")
     return parser.parse_args()
 
 
@@ -118,12 +119,16 @@ async def run(settings: Settings) -> None:
         )
         logger.info("ElevenLabs TTS enabled (voice: %s)", settings.elevenlabs_voice_id)
 
-    llm_client = create_llm_client(settings.llm_provider, settings.llm_model)
+    llm_client = create_llm_client(
+        settings.llm_provider,
+        settings.llm_model,
+        reasoning_effort=settings.llm_reasoning_effort,
+    )
 
     ws_manager = ConnectionManager()
 
     reasoning_agents: list[ReasoningAgent] = [
-        PresentationCritiqueAgent(model=settings.llm_model),
+        # PresentationCritiqueAgent(model=settings.llm_model),
     ]
     general_agent = GeneralAgent(
         db=db,
@@ -264,6 +269,7 @@ def main() -> None:
         ollama_max_image_width=args.max_image_width,
         llm_provider=args.llm_provider,
         llm_model=args.llm_model,
+        llm_reasoning_effort=args.llm_reasoning_effort if args.llm_reasoning_effort != "none" else None,
         debug=args.debug,
     )
 

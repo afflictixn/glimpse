@@ -19,10 +19,11 @@ _DEFAULT_TIMEOUT = 30
 class OpenAIClient:
     """LLMClient implementation backed by the OpenAI SDK."""
 
-    def __init__(self, model: str = "gpt-4o-mini", **kwargs: Any) -> None:
+    def __init__(self, model: str = "gpt-5.4-mini", **kwargs: Any) -> None:
         self._model = model
         self._api_key: str | None = kwargs.pop("api_key", None)
         self._timeout: float = kwargs.pop("timeout", _DEFAULT_TIMEOUT)
+        self._reasoning_effort: str | None = kwargs.pop("reasoning_effort", None)
         self._client = AsyncOpenAI(api_key=self._api_key)
         self._extra_kwargs = kwargs
 
@@ -40,6 +41,9 @@ class OpenAIClient:
 
         if tools:
             call_kwargs["tools"] = [self._to_oai_tool(t) for t in tools]
+
+        if self._reasoning_effort:
+            call_kwargs["reasoning_effort"] = self._reasoning_effort
 
         response = await asyncio.wait_for(
             self._client.chat.completions.create(**call_kwargs),
