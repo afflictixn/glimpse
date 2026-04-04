@@ -10,16 +10,15 @@ import uvicorn
 
 from src.api.server import create_app
 from src.capture.activity_feed import ActivityFeed
+from src.capture.browser_content import BrowserContentAgent
 from src.capture.event_tap import CaptureTrigger, EventTap
 from src.capture.triggers import CaptureLoop
 from src.config import Settings, set_settings
+from src.context.context_provider import ContextProvider
 from src.general_agent.agent import GeneralAgent
 from src.general_agent.tools import ToolRegistry
 from src.general_agent.ws_manager import ConnectionManager
 from src.llm import create_llm_client
-from src.process.browser_content_agent import BrowserContentAgent
-from src.process.process_agent import ProcessAgent
-from src.context.context_provider import ContextProvider
 from src.storage.database import DatabaseManager
 from src.storage.snapshot_writer import SnapshotWriter
 from src.voice.tts import VoiceClient
@@ -67,9 +66,7 @@ async def run(settings: Settings) -> None:
 
     tool_registry = ToolRegistry(db)
 
-    process_agents: list[ProcessAgent] = [
-        BrowserContentAgent(),
-    ]
+    browser_agent = BrowserContentAgent()
     context_providers: list[ContextProvider] = []
 
     # Voice (ElevenLabs TTS)
@@ -120,17 +117,17 @@ async def run(settings: Settings) -> None:
         snapshot_writer=snapshot_writer,
         trigger_queue=trigger_queue,
         activity_feed=activity_feed,
-        process_agents=process_agents,
         context_providers=context_providers,
         general_agent=general_agent,
+        browser_agent=browser_agent,
     )
 
     app = create_app(
         db,
         general_agent=general_agent,
         snapshot_writer=snapshot_writer,
-        process_agents=process_agents,
         context_providers=context_providers,
+        browser_agent=browser_agent,
         ws_manager=ws_manager,
     )
 

@@ -18,7 +18,6 @@ from src.capture.event_tap import ActivityKind, CaptureTrigger
 from src.capture.frame_compare import FrameComparer
 from src.intelligence.intelligence_layer import IntelligenceLayer
 from src.intelligence.reasoning_agent import ReasoningAgent
-from src.process.process_agent import NoOpAgent
 from src.storage.database import DatabaseManager
 from src.storage.models import Action, AdditionalContext, AppType, Event, Frame, OCRResult
 
@@ -214,19 +213,6 @@ class TestActivityFeed:
         feed = ActivityFeed(typing_pause_delay_ms=500, idle_capture_interval_ms=100)
         feed.mark_captured()
         assert feed.poll() is None
-
-
-# ── NoOp ProcessAgent ──
-
-
-@pytest.mark.asyncio
-class TestNoOpAgent:
-    async def test_returns_none(self):
-        agent = NoOpAgent()
-        assert agent.name == "noop"
-        img = Image.fromarray(np.zeros((10, 10, 3), dtype=np.uint8))
-        result = await agent.process(img, "some text", "App", "Window")
-        assert result is None
 
 
 # ── Intelligence Layer ──

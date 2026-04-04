@@ -11,12 +11,10 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from PIL import Image
-
 from src.intelligence.critique_agent import CritiqueReasoningAgent
 from src.intelligence.intelligence_layer import IntelligenceLayer
 from src.llm.types import Message
-from src.process.browser_content_agent import BrowserContentAgent
+from src.capture.browser_content import BrowserContentAgent
 from src.storage.models import Action, AppType, Event
 
 
@@ -88,12 +86,11 @@ class TestFullPipeline:
         ])
 
         # -- Run BrowserContentAgent --
-        img = Image.new("RGB", (100, 100))
         with patch(
-            "src.process.browser_content_agent.asyncio.create_subprocess_exec",
+            "src.capture.browser_content.asyncio.create_subprocess_exec",
             side_effect=osascript_mock,
         ):
-            event = await browser_agent.process(img, "", "Google Chrome", "Wireless Earbuds")
+            event = await browser_agent.extract("Google Chrome", "Wireless Earbuds")
 
         assert event is not None
         assert event.agent_name == "browser_content"
@@ -189,12 +186,11 @@ class TestFullPipeline:
         })
         osascript_mock = _mock_osascript_sequence([(js_result, 0)])
 
-        img = Image.new("RGB", (100, 100))
         with patch(
-            "src.process.browser_content_agent.asyncio.create_subprocess_exec",
+            "src.capture.browser_content.asyncio.create_subprocess_exec",
             side_effect=osascript_mock,
         ):
-            event = await browser_agent.process(img, "", "Google Chrome", "Random Page")
+            event = await browser_agent.extract("Google Chrome", "Random Page")
 
         assert event is not None
         assert "text" not in event.metadata
@@ -214,8 +210,7 @@ class TestFullPipeline:
         """A non-browser app should produce no Event at all."""
         browser_agent = BrowserContentAgent(allowlist_path=_make_allowlist(tmp_path))
 
-        img = Image.new("RGB", (100, 100))
-        result = await browser_agent.process(img, "", "Xcode", "main.swift")
+        result = await browser_agent.extract("Xcode", "main.swift")
         assert result is None
 
     @pytest.mark.asyncio
@@ -240,12 +235,11 @@ class TestFullPipeline:
             (full_out, 0),
         ])
 
-        img = Image.new("RGB", (100, 100))
         with patch(
-            "src.process.browser_content_agent.asyncio.create_subprocess_exec",
+            "src.capture.browser_content.asyncio.create_subprocess_exec",
             side_effect=osascript_mock,
         ):
-            event = await browser_agent.process(img, "", "Google Chrome", "Great Product")
+            event = await browser_agent.extract("Google Chrome", "Great Product")
 
         assert event is not None
         assert "text" in event.metadata

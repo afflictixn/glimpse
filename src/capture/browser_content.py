@@ -1,4 +1,4 @@
-"""ProcessAgent that extracts structured content from the active browser tab.
+"""Extracts structured content from the active browser tab.
 
 Chromium browsers use JXA (JavaScript for Automation) because Chrome's traditional
 AppleScript bridge breaks on recent macOS — it reports 0 windows even when windows
@@ -16,9 +16,6 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from PIL import Image
-
-from src.process.process_agent import ProcessAgent
 from src.storage.models import AppType, Event
 
 logger = logging.getLogger(__name__)
@@ -126,8 +123,10 @@ def _safari_applescript_fallback() -> str:
     )
 
 
-class BrowserContentAgent(ProcessAgent):
+class BrowserContentAgent:
     """Extracts structured page content from the user's active browser tab."""
+
+    name = "browser_content"
 
     def __init__(self, allowlist_path: str | Path | None = None) -> None:
         if allowlist_path is None:
@@ -135,10 +134,6 @@ class BrowserContentAgent(ProcessAgent):
         self._allowlist_path = Path(allowlist_path)
         self._allowlist: list[dict[str, str]] = self._load_allowlist()
         self._last_url: str | None = None
-
-    @property
-    def name(self) -> str:
-        return "browser_content"
 
     def _load_allowlist(self) -> list[dict[str, str]]:
         if not self._allowlist_path.exists():
@@ -159,13 +154,15 @@ class BrowserContentAgent(ProcessAgent):
                 return entry
         return None
 
-    async def process(
+    async def extract(
         self,
-        image: Image.Image,
-        ocr_text: str,
         app_name: str | None,
-        window_name: str | None,
+        window_name: str | None = None,
     ) -> Event | None:
+        """Extract structured content from the active browser tab.
+
+        Returns None if the app is not a browser or extraction fails.
+        """
         if not app_name or app_name not in ALL_BROWSERS:
             return None
 
@@ -190,13 +187,11 @@ class BrowserContentAgent(ProcessAgent):
 
         url = parsed.get("url", "")
 
-        # URL-based dedup
         if url and url == self._last_url:
             logger.debug("DOM dedup: same URL, skipping (%s)", url[:80])
             return None
         self._last_url = url
 
-        # Check allowlist for targeted extraction; fall back to generic body text
         match = self._match_allowlist(url)
         selector = match.get("selector", "body") if match else "body"
         max_len = MAX_TEXT_LENGTH if match else GENERIC_TEXT_LENGTH

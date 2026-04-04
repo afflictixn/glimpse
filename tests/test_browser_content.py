@@ -3,14 +3,12 @@ from __future__ import annotations
 
 import asyncio
 import json
-import tempfile
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from PIL import Image
 
-from src.process.browser_content_agent import (
+from src.capture.browser_content import (
     BrowserContentAgent,
     _chromium_jxa_execute,
     _chromium_jxa_fallback,
@@ -19,10 +17,6 @@ from src.process.browser_content_agent import (
     _EXTRACT_META_ONLY_PAGE_JS,
 )
 from src.storage.models import AppType
-
-
-def _img() -> Image.Image:
-    return Image.new("RGB", (100, 100))
 
 
 def _make_allowlist(tmp_path: Path, entries: list[dict] | None = None) -> Path:
@@ -62,19 +56,19 @@ class TestBrowserGating:
     @pytest.mark.asyncio
     async def test_non_browser_returns_none(self, tmp_path):
         agent = BrowserContentAgent(allowlist_path=_make_allowlist(tmp_path))
-        result = await agent.process(_img(), "", "Xcode", "main.swift")
+        result = await agent.extract("Xcode", "main.swift")
         assert result is None
 
     @pytest.mark.asyncio
     async def test_none_app_returns_none(self, tmp_path):
         agent = BrowserContentAgent(allowlist_path=_make_allowlist(tmp_path))
-        result = await agent.process(_img(), "", None, None)
+        result = await agent.extract(None, None)
         assert result is None
 
     @pytest.mark.asyncio
     async def test_terminal_returns_none(self, tmp_path):
         agent = BrowserContentAgent(allowlist_path=_make_allowlist(tmp_path))
-        result = await agent.process(_img(), "", "Terminal", "bash")
+        result = await agent.extract("Terminal", "bash")
         assert result is None
 
 
@@ -87,8 +81,8 @@ class TestChromeExtraction:
         js_out = _js_result("https://example.com/page", "Example Page")
         create_fn, _ = _mock_osascript(js_out)
 
-        with patch("src.process.browser_content_agent.asyncio.create_subprocess_exec", side_effect=create_fn):
-            result = await agent.process(_img(), "", "Google Chrome", "Example Page")
+        with patch("src.capture.browser_content.asyncio.create_subprocess_exec", side_effect=create_fn):
+            result = await agent.extract("Google Chrome", "Example Page")
 
         assert result is not None
         assert result.app_type == AppType.BROWSER
@@ -123,8 +117,8 @@ class TestChromeExtraction:
             mock.kill = MagicMock()
             return mock
 
-        with patch("src.process.browser_content_agent.asyncio.create_subprocess_exec", side_effect=_create):
-            result = await agent.process(_img(), "", "Google Chrome", "Widget")
+        with patch("src.capture.browser_content.asyncio.create_subprocess_exec", side_effect=_create):
+            result = await agent.extract("Google Chrome", "Widget")
 
         assert result is not None
         assert result.metadata["text"] == "Great product. 4.5 stars. Buy now."
@@ -139,8 +133,8 @@ class TestSafariExtraction:
         js_out = _js_result("https://example.com", "Safari Test")
         create_fn, _ = _mock_osascript(js_out)
 
-        with patch("src.process.browser_content_agent.asyncio.create_subprocess_exec", side_effect=create_fn):
-            result = await agent.process(_img(), "", "Safari", "Safari Test")
+        with patch("src.capture.browser_content.asyncio.create_subprocess_exec", side_effect=create_fn):
+            result = await agent.extract("Safari", "Safari Test")
 
         assert result is not None
         assert result.app_type == AppType.BROWSER
@@ -171,8 +165,8 @@ class TestFallback:
             mock.kill = MagicMock()
             return mock
 
-        with patch("src.process.browser_content_agent.asyncio.create_subprocess_exec", side_effect=_create):
-            result = await agent.process(_img(), "", "Google Chrome", "window")
+        with patch("src.capture.browser_content.asyncio.create_subprocess_exec", side_effect=_create):
+            result = await agent.extract("Google Chrome", "window")
 
         assert result is not None
         assert result.metadata["url"] == "https://example.com"
@@ -199,9 +193,9 @@ class TestTimeout:
             mock.kill = MagicMock()
             return mock
 
-        with patch("src.process.browser_content_agent.asyncio.create_subprocess_exec", side_effect=_create):
-            with patch("src.process.browser_content_agent.OSASCRIPT_TIMEOUT_S", 0.1):
-                result = await agent.process(_img(), "", "Google Chrome", "window")
+        with patch("src.capture.browser_content.asyncio.create_subprocess_exec", side_effect=_create):
+            with patch("src.capture.browser_content.OSASCRIPT_TIMEOUT_S", 0.1):
+                result = await agent.extract("Google Chrome", "window")
 
         assert result is None
 
@@ -215,9 +209,9 @@ class TestUrlDedup:
         js_out = _js_result("https://example.com/page1", "Page 1")
         create_fn, _ = _mock_osascript(js_out)
 
-        with patch("src.process.browser_content_agent.asyncio.create_subprocess_exec", side_effect=create_fn):
-            r1 = await agent.process(_img(), "", "Google Chrome", "Page 1")
-            r2 = await agent.process(_img(), "", "Google Chrome", "Page 1")
+        with patch("src.capture.browser_content.asyncio.create_subprocess_exec", side_effect=create_fn):
+            r1 = await agent.extract("Google Chrome", "Page 1")
+            r2 = await agent.extract("Google Chrome", "Page 1")
 
         assert r1 is not None
         assert r2 is None
@@ -232,7 +226,7 @@ class TestUrlDedup:
             nonlocal call_count
             call_count += 1
             mock = AsyncMock()
-            # Each process() call makes 2 osascript calls (meta + body).
+            # Each extract() call makes 2 osascript calls (meta + body).
             # Calls 1-2 → page1, calls 3-4 → page2.
             if call_count <= 2:
                 out = _js_result("https://example.com/page1", "Page 1")
@@ -243,9 +237,9 @@ class TestUrlDedup:
             mock.kill = MagicMock()
             return mock
 
-        with patch("src.process.browser_content_agent.asyncio.create_subprocess_exec", side_effect=_create):
-            r1 = await agent.process(_img(), "", "Google Chrome", "Page 1")
-            r2 = await agent.process(_img(), "", "Google Chrome", "Page 2")
+        with patch("src.capture.browser_content.asyncio.create_subprocess_exec", side_effect=_create):
+            r1 = await agent.extract("Google Chrome", "Page 1")
+            r2 = await agent.extract("Google Chrome", "Page 2")
 
         assert r1 is not None
         assert r2 is not None
@@ -278,8 +272,8 @@ class TestAllowlist:
             mock.kill = MagicMock()
             return mock
 
-        with patch("src.process.browser_content_agent.asyncio.create_subprocess_exec", side_effect=_create):
-            result = await agent.process(_img(), "", "Google Chrome", "Unknown")
+        with patch("src.capture.browser_content.asyncio.create_subprocess_exec", side_effect=_create):
+            result = await agent.extract("Google Chrome", "Unknown")
 
         assert result is not None
         assert result.metadata["text"] == "Hello world, this is page content."
@@ -305,8 +299,8 @@ class TestAllowlist:
             mock.kill = MagicMock()
             return mock
 
-        with patch("src.process.browser_content_agent.asyncio.create_subprocess_exec", side_effect=_create):
-            result = await agent.process(_img(), "", "Google Chrome", "Test Page")
+        with patch("src.capture.browser_content.asyncio.create_subprocess_exec", side_effect=_create):
+            result = await agent.extract("Google Chrome", "Test Page")
 
         assert result is not None
         assert result.metadata.get("allowlist_label") == "Test"
@@ -341,8 +335,8 @@ class TestTruncation:
             mock.kill = MagicMock()
             return mock
 
-        with patch("src.process.browser_content_agent.asyncio.create_subprocess_exec", side_effect=_create):
-            result = await agent.process(_img(), "", "Google Chrome", "Test")
+        with patch("src.capture.browser_content.asyncio.create_subprocess_exec", side_effect=_create):
+            result = await agent.extract("Google Chrome", "Test")
 
         assert result is not None
         assert len(result.metadata["text"]) <= 8000
@@ -368,8 +362,8 @@ class TestTruncation:
             mock.kill = MagicMock()
             return mock
 
-        with patch("src.process.browser_content_agent.asyncio.create_subprocess_exec", side_effect=_create):
-            result = await agent.process(_img(), "", "Google Chrome", "Unknown")
+        with patch("src.capture.browser_content.asyncio.create_subprocess_exec", side_effect=_create):
+            result = await agent.extract("Google Chrome", "Unknown")
 
         assert result is not None
         assert len(result.metadata["text"]) <= 4000
@@ -442,8 +436,8 @@ class TestOsascriptFlags:
             captured_calls.append(args)
             return await original_create(*args, **kwargs)
 
-        with patch("src.process.browser_content_agent.asyncio.create_subprocess_exec", side_effect=_capture):
-            await agent.process(_img(), "", "Google Chrome", "Test")
+        with patch("src.capture.browser_content.asyncio.create_subprocess_exec", side_effect=_capture):
+            await agent.extract("Google Chrome", "Test")
 
         assert len(captured_calls) >= 1
         first_call_args = captured_calls[0]
@@ -464,8 +458,8 @@ class TestOsascriptFlags:
             result = await create_fn(*args, **kwargs)
             return result
 
-        with patch("src.process.browser_content_agent.asyncio.create_subprocess_exec", side_effect=_capture):
-            await agent.process(_img(), "", "Safari", "Safari Test")
+        with patch("src.capture.browser_content.asyncio.create_subprocess_exec", side_effect=_capture):
+            await agent.extract("Safari", "Safari Test")
 
         assert len(captured_calls) >= 1
         first_call_args = captured_calls[0]
@@ -486,8 +480,8 @@ class TestOsascriptFlags:
             captured_calls.append(args)
             return await create_fn(*args, **kwargs)
 
-        with patch("src.process.browser_content_agent.asyncio.create_subprocess_exec", side_effect=_capture):
-            await agent.process(_img(), "", "Arc", "Arc Test")
+        with patch("src.capture.browser_content.asyncio.create_subprocess_exec", side_effect=_capture):
+            await agent.extract("Arc", "Arc Test")
 
         first_call_args = captured_calls[0]
         assert first_call_args[1:3] == ("-l", "JavaScript")
@@ -516,8 +510,8 @@ class TestOsascriptFlags:
             mock.kill = MagicMock()
             return mock
 
-        with patch("src.process.browser_content_agent.asyncio.create_subprocess_exec", side_effect=_create):
-            await agent.process(_img(), "", "Google Chrome", "window")
+        with patch("src.capture.browser_content.asyncio.create_subprocess_exec", side_effect=_create):
+            await agent.extract("Google Chrome", "window")
 
         for call_args in captured_calls:
             assert call_args[0] == "osascript"
@@ -554,7 +548,7 @@ class TestLiveChromeIntegration:
     @pytest.mark.asyncio
     async def test_meta_extraction_returns_url(self, tmp_path):
         agent = BrowserContentAgent(allowlist_path=_make_allowlist(tmp_path))
-        result = await agent.process(_img(), "", "Google Chrome", "live test")
+        result = await agent.extract("Google Chrome", "live test")
         assert result is not None
         assert result.metadata["url"].startswith("http")
         assert result.metadata["title"]
@@ -563,16 +557,15 @@ class TestLiveChromeIntegration:
     @pytest.mark.asyncio
     async def test_body_text_extracted(self, tmp_path):
         agent = BrowserContentAgent(allowlist_path=_make_allowlist(tmp_path))
-        result = await agent.process(_img(), "", "Google Chrome", "live body test")
+        result = await agent.extract("Google Chrome", "live body test")
         assert result is not None
-        # Non-allowlisted pages should still have text (generic body extraction)
         if "text" in result.metadata:
             assert len(result.metadata["text"]) > 0
 
     @pytest.mark.asyncio
     async def test_dedup_same_page(self, tmp_path):
         agent = BrowserContentAgent(allowlist_path=_make_allowlist(tmp_path))
-        r1 = await agent.process(_img(), "", "Google Chrome", "dedup 1")
-        r2 = await agent.process(_img(), "", "Google Chrome", "dedup 2")
+        r1 = await agent.extract("Google Chrome", "dedup 1")
+        r2 = await agent.extract("Google Chrome", "dedup 2")
         assert r1 is not None
         assert r2 is None  # same URL, should be deduped

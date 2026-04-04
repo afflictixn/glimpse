@@ -10,7 +10,6 @@ These test the actual fixes for the hanging bug:
 from __future__ import annotations
 
 import asyncio
-import concurrent.futures
 import time
 from unittest.mock import patch
 
@@ -22,7 +21,6 @@ from src.capture.activity_feed import ActivityFeed
 from src.capture.event_tap import CaptureTrigger
 from src.capture.triggers import CaptureLoop, process_frame
 from src.config import Settings
-from src.process.process_agent import ProcessAgent
 from src.storage.database import DatabaseManager
 from src.storage.models import AppType, Event, OCRResult
 from src.storage.snapshot_writer import SnapshotWriter
@@ -39,104 +37,86 @@ def _mock_ocr(image):
     return OCRResult(text="mocked ocr text", text_json="[]", confidence=0.99)
 
 
-class FastAgent(ProcessAgent):
-    """Completes instantly, returns an event."""
+class FakeBrowserAgent:
+    """Simulates BrowserContentAgent that returns a browser event."""
 
-    def __init__(self, agent_name: str = "fast"):
-        self._name = agent_name
+    name = "browser_content"
+
+    def __init__(self):
         self.call_count = 0
         self.call_timestamps: list[float] = []
 
-    @property
-    def name(self) -> str:
-        return self._name
-
-    async def process(self, image, ocr_text, app_name, window_name) -> Event | None:
+    async def extract(self, app_name, window_name=None) -> Event | None:
         self.call_count += 1
         self.call_timestamps.append(time.monotonic())
         return Event(
-            agent_name=self._name,
+            agent_name=self.name,
             app_type=AppType.BROWSER,
-            summary=f"Fast result #{self.call_count} for {app_name}",
-            metadata={"window": window_name},
+            summary=f"Browser result #{self.call_count} for {app_name}",
+            metadata={"window": window_name, "url": "https://example.com"},
         )
 
 
-class SlowAsyncAgent(ProcessAgent):
-    """Simulates a slow cooperative async call (like an awaited API request)."""
+class SlowBrowserAgent:
+    """Simulates a slow cooperative async browser extraction."""
 
-    def __init__(self, delay_s: float = 10.0, agent_name: str = "slow_async"):
+    name = "browser_content"
+
+    def __init__(self, delay_s: float = 10.0):
         self._delay = delay_s
-        self._name = agent_name
         self.call_count = 0
         self.started = asyncio.Event()
 
-    @property
-    def name(self) -> str:
-        return self._name
-
-    async def process(self, image, ocr_text, app_name, window_name) -> Event | None:
+    async def extract(self, app_name, window_name=None) -> Event | None:
         self.call_count += 1
         self.started.set()
         await asyncio.sleep(self._delay)
-        return Event(agent_name=self._name, app_type=AppType.OTHER, summary="Slow")
+        return Event(agent_name=self.name, app_type=AppType.BROWSER, summary="Slow")
 
 
-class BlockingThreadAgent(ProcessAgent):
-    """Simulates a blocking I/O call offloaded to a thread (like urllib in GemmaAgent).
+class BlockingBrowserAgent:
+    """Simulates a blocking I/O call offloaded to a thread."""
 
-    This is the realistic pattern — a sync HTTP call run via to_thread.
-    """
+    name = "browser_content"
 
-    def __init__(self, delay_s: float = 10.0, agent_name: str = "blocking"):
+    def __init__(self, delay_s: float = 10.0):
         self._delay = delay_s
-        self._name = agent_name
         self.call_count = 0
         self.started = asyncio.Event()
 
-    @property
-    def name(self) -> str:
-        return self._name
-
-    async def process(self, image, ocr_text, app_name, window_name) -> Event | None:
+    async def extract(self, app_name, window_name=None) -> Event | None:
         self.call_count += 1
         self.started.set()
-        # This is how real blocking I/O works in this codebase (see GemmaAgent)
         await asyncio.to_thread(time.sleep, self._delay)
-        return Event(agent_name=self._name, app_type=AppType.OTHER, summary="Blocking")
+        return Event(agent_name=self.name, app_type=AppType.BROWSER, summary="Blocking")
 
 
-class FailingAgent(ProcessAgent):
+class FailingBrowserAgent:
     """Raises an exception every time."""
 
-    def __init__(self, agent_name: str = "failing"):
-        self._name = agent_name
+    name = "browser_content"
+
+    def __init__(self):
         self.call_count = 0
 
-    @property
-    def name(self) -> str:
-        return self._name
-
-    async def process(self, image, ocr_text, app_name, window_name) -> Event | None:
+    async def extract(self, app_name, window_name=None) -> Event | None:
         self.call_count += 1
-        raise RuntimeError(f"Agent {self._name} intentional failure")
+        raise RuntimeError("Browser agent intentional failure")
 
 
-class NoneAgent(ProcessAgent):
-    """Always returns None — simulates non-browser frames where BrowserContentAgent skips."""
+class NoneBrowserAgent:
+    """Always returns None — simulates non-browser frames."""
 
-    @property
-    def name(self) -> str:
-        return "none_agent"
+    name = "browser_content"
 
-    async def process(self, image, ocr_text, app_name, window_name) -> Event | None:
+    async def extract(self, app_name, window_name=None) -> Event | None:
         return None
 
 
 def _make_capture_loop(
     settings: Settings,
     db: DatabaseManager,
-    agents: list[ProcessAgent],
+    browser_agent=None,
     trigger_queue: asyncio.Queue | None = None,
 ) -> CaptureLoop:
     writer = SnapshotWriter(settings)
@@ -151,8 +131,8 @@ def _make_capture_loop(
         snapshot_writer=writer,
         trigger_queue=queue,
         activity_feed=activity,
-        process_agents=agents,
         context_providers=[],
+        browser_agent=browser_agent,
     )
 
 
@@ -197,8 +177,8 @@ async def _stop_loop(loop: CaptureLoop, task: asyncio.Task) -> None:
 class TestProcessFrame:
 
     async def test_happy_path_writes_to_db(self, db, tmp_settings):
-        """Fast agent runs, event lands in the database."""
-        agent = FastAgent()
+        """Browser agent runs, event lands in the database."""
+        agent = FakeBrowserAgent()
         writer = SnapshotWriter(tmp_settings)
 
         with patch("src.capture.triggers.perform_ocr", side_effect=_mock_ocr):
@@ -209,21 +189,23 @@ class TestProcessFrame:
                 trigger="click",
                 db=db,
                 writer=writer,
-                agents=[agent],
                 providers=[],
+                browser_agent=agent,
             )
 
         assert frame_id >= 1
         events = await db.get_events_for_frame(frame_id)
         assert len(events) == 1
-        assert events[0]["agent_name"] == "fast"
+        assert events[0]["agent_name"] == "browser_content"
         assert "Safari" in events[0]["summary"]
 
-    async def test_failing_agent_doesnt_kill_sibling(self, db, tmp_settings):
-        """One agent crashes, the other still saves its event."""
-        fast = FastAgent()
-        failing = FailingAgent()
+    async def test_failing_browser_agent_still_saves_frame(self, db, tmp_settings):
+        """Browser agent crashes, frame is still saved and screen_capture pushed."""
+        failing = FailingBrowserAgent()
         writer = SnapshotWriter(tmp_settings)
+        from unittest.mock import AsyncMock as AM
+        mock_ga = AM()
+        mock_ga.push = AM()
 
         with patch("src.capture.triggers.perform_ocr", side_effect=_mock_ocr):
             frame_id = await process_frame(
@@ -233,18 +215,21 @@ class TestProcessFrame:
                 trigger="click",
                 db=db,
                 writer=writer,
-                agents=[fast, failing],
                 providers=[],
+                browser_agent=failing,
+                general_agent=mock_ga,
             )
 
-        events = await db.get_events_for_frame(frame_id)
-        assert len(events) == 1
-        assert events[0]["agent_name"] == "fast"
+        assert frame_id >= 1
+        # Browser agent failed, so screen_capture should be pushed
+        mock_ga.push.assert_awaited_once()
+        data = mock_ga.push.call_args[0][1]
+        assert data["agent_name"] == "screen_capture"
 
     async def test_wait_for_kills_slow_process_frame(self, db, tmp_settings):
         """asyncio.wait_for can cancel a hanging process_frame — this is
         what _do_capture relies on for its timeout."""
-        slow = SlowAsyncAgent(delay_s=30)
+        slow = SlowBrowserAgent(delay_s=30)
         writer = SnapshotWriter(tmp_settings)
 
         t0 = time.monotonic()
@@ -258,8 +243,8 @@ class TestProcessFrame:
                         trigger="app_switch",
                         db=db,
                         writer=writer,
-                        agents=[slow],
                         providers=[],
+                        browser_agent=slow,
                     ),
                     timeout=0.5,
                 )
@@ -269,8 +254,8 @@ class TestProcessFrame:
         assert slow.call_count == 1
 
     async def test_wait_for_kills_blocking_thread_agent(self, db, tmp_settings):
-        """Even a thread-blocking agent (like real HTTP calls) gets cancelled."""
-        blocking = BlockingThreadAgent(delay_s=30)
+        """Even a thread-blocking agent gets cancelled."""
+        blocking = BlockingBrowserAgent(delay_s=30)
         writer = SnapshotWriter(tmp_settings)
 
         t0 = time.monotonic()
@@ -284,8 +269,8 @@ class TestProcessFrame:
                         trigger="click",
                         db=db,
                         writer=writer,
-                        agents=[blocking],
                         providers=[],
+                        browser_agent=blocking,
                     ),
                     timeout=0.5,
                 )
@@ -293,10 +278,10 @@ class TestProcessFrame:
 
         assert elapsed < 2.0, f"Timeout took {elapsed:.1f}s — should be ~0.5s"
 
-    async def test_raw_frame_push_when_no_agent_event(self, db, tmp_settings):
-        """When no agent returns an event, a screen_capture push is sent to GA."""
+    async def test_raw_frame_push_when_no_browser_event(self, db, tmp_settings):
+        """When browser agent returns None, a screen_capture push is sent to GA."""
         from unittest.mock import AsyncMock as AM
-        agent = NoneAgent()
+        agent = NoneBrowserAgent()
         writer = SnapshotWriter(tmp_settings)
         mock_ga = AM()
         mock_ga.push = AM()
@@ -309,8 +294,8 @@ class TestProcessFrame:
                 trigger="click",
                 db=db,
                 writer=writer,
-                agents=[agent],
                 providers=[],
+                browser_agent=agent,
                 general_agent=mock_ga,
             )
 
@@ -323,10 +308,10 @@ class TestProcessFrame:
         assert data["metadata"]["ocr_text"] == "mocked ocr text"
         assert "snapshot_path" in data["metadata"]
 
-    async def test_no_raw_push_when_agent_returns_event(self, db, tmp_settings):
-        """When an agent returns an event, no screen_capture push is sent."""
+    async def test_no_raw_push_when_browser_returns_event(self, db, tmp_settings):
+        """When browser agent returns an event, no screen_capture push is sent."""
         from unittest.mock import AsyncMock as AM
-        agent = FastAgent()
+        agent = FakeBrowserAgent()
         writer = SnapshotWriter(tmp_settings)
         mock_ga = AM()
         mock_ga.push = AM()
@@ -339,15 +324,37 @@ class TestProcessFrame:
                 trigger="click",
                 db=db,
                 writer=writer,
-                agents=[agent],
+                providers=[],
+                browser_agent=agent,
+                general_agent=mock_ga,
+            )
+
+        mock_ga.push.assert_awaited_once()
+        data = mock_ga.push.call_args[0][1]
+        assert data["agent_name"] == "browser_content"
+
+    async def test_no_browser_agent_pushes_screen_capture(self, db, tmp_settings):
+        """When browser_agent is None, screen_capture is pushed to GA."""
+        from unittest.mock import AsyncMock as AM
+        writer = SnapshotWriter(tmp_settings)
+        mock_ga = AM()
+        mock_ga.push = AM()
+
+        with patch("src.capture.triggers.perform_ocr", side_effect=_mock_ocr):
+            await process_frame(
+                image=_make_image(),
+                app_name="Terminal",
+                window_name="zsh",
+                trigger="click",
+                db=db,
+                writer=writer,
                 providers=[],
                 general_agent=mock_ga,
             )
 
-        # GA should have received a push, but for the agent's event, not screen_capture
         mock_ga.push.assert_awaited_once()
         data = mock_ga.push.call_args[0][1]
-        assert data["agent_name"] == "fast"
+        assert data["agent_name"] == "screen_capture"
 
 
 # ── CaptureLoop tests ────────────────────────────────────────
@@ -378,9 +385,9 @@ class TestCaptureLoopNonBlocking:
         tmp_settings.capture_timeout_s = 10
         tmp_settings.visual_check_interval_ms = 999_999
 
-        slow = SlowAsyncAgent(delay_s=10)
+        slow = SlowBrowserAgent(delay_s=10)
         queue: asyncio.Queue[CaptureTrigger] = asyncio.Queue()
-        loop = _make_capture_loop(tmp_settings, db, [slow], queue)
+        loop = _make_capture_loop(tmp_settings, db, browser_agent=slow, trigger_queue=queue)
 
         with _patch_capture():
             task = asyncio.create_task(loop.run())
@@ -421,24 +428,22 @@ class TestCaptureLoopNonBlocking:
 
         call_number = 0
 
-        class HangThenFastAgent(ProcessAgent):
-            @property
-            def name(self):
-                return "hang_then_fast"
+        class HangThenFastBrowserAgent:
+            name = "browser_content"
 
-            async def process(self, image, ocr_text, app_name, window_name):
+            async def extract(self, app_name, window_name=None):
                 nonlocal call_number
                 call_number += 1
                 if call_number == 1:
-                    await asyncio.sleep(30)  # simulate a Gemini hang
+                    await asyncio.sleep(30)
                 return Event(
-                    agent_name="hang_then_fast",
+                    agent_name="browser_content",
                     app_type=AppType.BROWSER,
                     summary=f"call {call_number}",
                 )
 
         queue: asyncio.Queue[CaptureTrigger] = asyncio.Queue()
-        loop = _make_capture_loop(tmp_settings, db, [HangThenFastAgent()], queue)
+        loop = _make_capture_loop(tmp_settings, db, browser_agent=HangThenFastBrowserAgent(), trigger_queue=queue)
 
         t0 = time.monotonic()
 
@@ -477,9 +482,9 @@ class TestCaptureLoopNonBlocking:
         tmp_settings.capture_timeout_s = 0.5
         tmp_settings.visual_check_interval_ms = 999_999
 
-        slow = SlowAsyncAgent(delay_s=30)
+        slow = SlowBrowserAgent(delay_s=30)
         queue: asyncio.Queue[CaptureTrigger] = asyncio.Queue()
-        loop = _make_capture_loop(tmp_settings, db, [slow], queue)
+        loop = _make_capture_loop(tmp_settings, db, browser_agent=slow, trigger_queue=queue)
 
         with _patch_capture():
             task = asyncio.create_task(loop.run())
@@ -510,9 +515,9 @@ class TestCaptureLoopNonBlocking:
         tmp_settings.capture_timeout_s = 5
         tmp_settings.visual_check_interval_ms = 999_999
 
-        slow = SlowAsyncAgent(delay_s=0.8, agent_name="medium")
+        slow = SlowBrowserAgent(delay_s=0.8)
         queue: asyncio.Queue[CaptureTrigger] = asyncio.Queue()
-        loop = _make_capture_loop(tmp_settings, db, [slow], queue)
+        loop = _make_capture_loop(tmp_settings, db, browser_agent=slow, trigger_queue=queue)
 
         with _patch_capture():
             task = asyncio.create_task(loop.run())
@@ -551,9 +556,9 @@ class TestCaptureLoopResilience:
         tmp_settings.poll_interval_ms = 50
         tmp_settings.visual_check_interval_ms = 999_999
 
-        agent = FastAgent()
+        agent = FakeBrowserAgent()
         queue: asyncio.Queue[CaptureTrigger] = asyncio.Queue()
-        loop = _make_capture_loop(tmp_settings, db, [agent], queue)
+        loop = _make_capture_loop(tmp_settings, db, browser_agent=agent, trigger_queue=queue)
 
         call_seq = 0
 
@@ -589,15 +594,15 @@ class TestCaptureLoopResilience:
         assert agent.call_count >= 1, "Second capture should have succeeded"
 
     async def test_agent_exception_doesnt_kill_loop(self, db, tmp_settings):
-        """An agent that always throws doesn't prevent subsequent captures."""
+        """A browser agent that always throws doesn't prevent subsequent captures."""
         tmp_settings.min_capture_interval_ms = 0
         tmp_settings.poll_interval_ms = 50
         tmp_settings.capture_timeout_s = 5
         tmp_settings.visual_check_interval_ms = 999_999
 
-        failing = FailingAgent()
+        failing = FailingBrowserAgent()
         queue: asyncio.Queue[CaptureTrigger] = asyncio.Queue()
-        loop = _make_capture_loop(tmp_settings, db, [failing], queue)
+        loop = _make_capture_loop(tmp_settings, db, browser_agent=failing, trigger_queue=queue)
 
         with _patch_capture():
             task = asyncio.create_task(loop.run())
@@ -616,9 +621,9 @@ class TestCaptureLoopResilience:
             f"exception should not prevent next capture"
         )
 
-    async def test_ocr_crash_still_runs_agents(self, db, tmp_settings):
-        """OCR failure shouldn't prevent agents from processing the frame."""
-        agent = FastAgent()
+    async def test_ocr_crash_still_runs_browser_agent(self, db, tmp_settings):
+        """OCR failure shouldn't prevent browser agent from running."""
+        agent = FakeBrowserAgent()
         writer = SnapshotWriter(tmp_settings)
 
         def exploding_ocr(image):
@@ -632,8 +637,8 @@ class TestCaptureLoopResilience:
                 trigger="app_switch",
                 db=db,
                 writer=writer,
-                agents=[agent],
                 providers=[],
+                browser_agent=agent,
             )
 
         assert agent.call_count == 1
@@ -650,16 +655,15 @@ class TestCaptureLoopWithBlockingIO:
     """
 
     async def test_blocking_thread_agent_gets_timed_out(self, db, tmp_settings):
-        """An agent that blocks a thread (like GemmaAgent's urllib call)
-        must be cancelled by the capture_timeout_s."""
+        """An agent that blocks a thread must be cancelled by the capture_timeout_s."""
         tmp_settings.min_capture_interval_ms = 0
         tmp_settings.poll_interval_ms = 50
         tmp_settings.capture_timeout_s = 0.5
         tmp_settings.visual_check_interval_ms = 999_999
 
-        blocking = BlockingThreadAgent(delay_s=30)
+        blocking = BlockingBrowserAgent(delay_s=30)
         queue: asyncio.Queue[CaptureTrigger] = asyncio.Queue()
-        loop = _make_capture_loop(tmp_settings, db, [blocking], queue)
+        loop = _make_capture_loop(tmp_settings, db, browser_agent=blocking, trigger_queue=queue)
 
         with _patch_capture():
             task = asyncio.create_task(loop.run())
@@ -691,25 +695,22 @@ class TestCaptureLoopWithBlockingIO:
 
         attempt = 0
 
-        class BlockThenFastAgent(ProcessAgent):
-            @property
-            def name(self):
-                return "block_then_fast"
+        class BlockThenFastBrowserAgent:
+            name = "browser_content"
 
-            async def process(self, image, ocr_text, app_name, window_name):
+            async def extract(self, app_name, window_name=None):
                 nonlocal attempt
                 attempt += 1
                 if attempt == 1:
-                    # Simulate a real blocking HTTP call that hangs
                     await asyncio.to_thread(time.sleep, 30)
                 return Event(
-                    agent_name="block_then_fast",
+                    agent_name="browser_content",
                     app_type=AppType.OTHER,
                     summary=f"attempt {attempt}",
                 )
 
         queue: asyncio.Queue[CaptureTrigger] = asyncio.Queue()
-        loop = _make_capture_loop(tmp_settings, db, [BlockThenFastAgent()], queue)
+        loop = _make_capture_loop(tmp_settings, db, browser_agent=BlockThenFastBrowserAgent(), trigger_queue=queue)
 
         t0 = time.monotonic()
 
@@ -756,9 +757,9 @@ class TestCaptureLoopShutdown:
         tmp_settings.capture_timeout_s = 30  # high — we want stop() to cancel, not timeout
         tmp_settings.visual_check_interval_ms = 999_999
 
-        slow = SlowAsyncAgent(delay_s=30)
+        slow = SlowBrowserAgent(delay_s=30)
         queue: asyncio.Queue[CaptureTrigger] = asyncio.Queue()
-        loop = _make_capture_loop(tmp_settings, db, [slow], queue)
+        loop = _make_capture_loop(tmp_settings, db, browser_agent=slow, trigger_queue=queue)
 
         with _patch_capture():
             task = asyncio.create_task(loop.run())
@@ -787,7 +788,7 @@ class TestCaptureLoopShutdown:
         tmp_settings.poll_interval_ms = 50
         tmp_settings.visual_check_interval_ms = 999_999
 
-        loop = _make_capture_loop(tmp_settings, db, [FastAgent()])
+        loop = _make_capture_loop(tmp_settings, db, browser_agent=FakeBrowserAgent())
 
         with _patch_capture():
             task = asyncio.create_task(loop.run())
@@ -816,24 +817,22 @@ class TestLastCaptureTimestamp:
 
         call_number = 0
 
-        class TimeoutThenFastAgent(ProcessAgent):
-            @property
-            def name(self):
-                return "timeout_then_fast"
+        class TimeoutThenFastBrowserAgent:
+            name = "browser_content"
 
-            async def process(self, image, ocr_text, app_name, window_name):
+            async def extract(self, app_name, window_name=None):
                 nonlocal call_number
                 call_number += 1
                 if call_number == 1:
-                    await asyncio.sleep(30)  # will be timed out
+                    await asyncio.sleep(30)
                 return Event(
-                    agent_name="timeout_then_fast",
+                    agent_name="browser_content",
                     app_type=AppType.OTHER,
                     summary=f"attempt {call_number}",
                 )
 
         queue: asyncio.Queue[CaptureTrigger] = asyncio.Queue()
-        loop = _make_capture_loop(tmp_settings, db, [TimeoutThenFastAgent()], queue)
+        loop = _make_capture_loop(tmp_settings, db, browser_agent=TimeoutThenFastBrowserAgent(), trigger_queue=queue)
 
         t0 = time.monotonic()
 
