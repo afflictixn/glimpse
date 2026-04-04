@@ -8,7 +8,9 @@ from typing import Any
 
 from openai import AsyncOpenAI
 
-from src.llm.types import Message, ToolCall, ToolSpec
+import base64
+
+from src.llm.types import ContentPart, Message, ToolCall, ToolSpec, text_content
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +69,7 @@ class OpenAIClient:
 
         for msg in messages:
             if msg.role == "system":
-                system_parts.append(msg.content)
+                system_parts.append(text_content(msg))
                 continue
 
             if msg.role == "assistant" and msg.tool_calls:
@@ -79,18 +81,31 @@ class OpenAIClient:
                         "arguments": json.dumps(tc.arguments),
                     })
                 if msg.content:
-                    input_list.append({"role": "assistant", "content": msg.content})
+                    input_list.append({"role": "assistant", "content": text_content(msg)})
                 continue
 
             if msg.role == "tool":
                 input_list.append({
                     "type": "function_call_output",
                     "call_id": msg.tool_call_id,
-                    "output": msg.content,
+                    "output": text_content(msg),
                 })
                 continue
 
-            input_list.append({"role": msg.role, "content": msg.content})
+            if isinstance(msg.content, list):
+                content_arr: list[dict[str, Any]] = []
+                for cp in msg.content:
+                    if cp.type == "text" and cp.text:
+                        content_arr.append({"type": "input_text", "text": cp.text})
+                    elif cp.type == "image" and cp.image_data:
+                        b64 = base64.b64encode(cp.image_data).decode()
+                        content_arr.append({
+                            "type": "input_image",
+                            "image_url": f"data:{cp.mime_type};base64,{b64}",
+                        })
+                input_list.append({"role": msg.role, "content": content_arr})
+            else:
+                input_list.append({"role": msg.role, "content": msg.content})
 
         instructions = "\n\n".join(system_parts) if system_parts else None
         return instructions, input_list

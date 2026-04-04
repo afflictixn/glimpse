@@ -456,7 +456,7 @@ class TestGeneralAgentUnit:
         result = await agent._enrich(item)
         assert "headphones" in result.lower() or "cheaper" in result.lower()
 
-    async def test_process_item_surfaces_high_importance(self, agent: GeneralAgent):
+    async def test_process_item_surfaces_action(self, agent: GeneralAgent):
         agent._llm.chat_with_tools = AsyncMock(return_value="Important insight here.")
         agent._ws_send = AsyncMock()
 

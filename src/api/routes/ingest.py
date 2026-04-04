@@ -45,10 +45,9 @@ async def ingest_frame(
         trigger=trigger,
         db=state.db,
         writer=state.snapshot_writer,
-        agents=state.process_agents,
         providers=state.context_providers,
-        intelligence=state.intelligence_layer,
         general_agent=state.general_agent,
+        browser_agent=state.browser_agent,
     )
 
     logger.debug("Ingested frame %d from overlay (trigger=%s, app=%s)", frame_id, trigger, app_name)

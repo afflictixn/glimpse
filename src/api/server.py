@@ -18,18 +18,16 @@ def create_app(
     db: DatabaseManager,
     general_agent=None,
     snapshot_writer=None,
-    process_agents=None,
     context_providers=None,
-    intelligence_layer=None,
+    browser_agent=None,
     ws_manager: ConnectionManager | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Z Exp", version="0.1.0")
     app.state.db = db
     app.state.general_agent = general_agent
     app.state.snapshot_writer = snapshot_writer
-    app.state.process_agents = process_agents or []
     app.state.context_providers = context_providers or []
-    app.state.intelligence_layer = intelligence_layer
+    app.state.browser_agent = browser_agent
     app.state.ws_manager = ws_manager
 
     @app.middleware("http")

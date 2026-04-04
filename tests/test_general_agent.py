@@ -14,10 +14,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.general_agent.agent import GeneralAgent, PushItem
+from src.general_agent.agent import GeneralAgent, PushItem, FRAME_PROMPTS
 from src.general_agent.tools import ToolRegistry
 from src.general_agent.ws_manager import ConnectionManager
-from src.llm.types import Message, ToolCall, ToolSpec
+from src.llm.types import ContentPart, Message, ToolCall, ToolSpec, text_content
 from src.storage.database import DatabaseManager
 from src.storage.models import Event, AppType, Frame
 
@@ -646,102 +646,254 @@ class TestWSEndpointErrorBoundary:
         assert "couldn't generate" in convos[0]["text"].lower()
 
 
-# ── 10. IntelligenceLayer reasoning timeout ──────────────────
+# ── 10. ContentPart / multimodal types ────────────────────────
+
+
+class TestContentPartTypes:
+    def test_text_content_from_string(self):
+        msg = Message(role="user", content="hello")
+        assert text_content(msg) == "hello"
+
+    def test_text_content_from_parts(self):
+        msg = Message(role="user", content=[
+            ContentPart(type="text", text="part 1"),
+            ContentPart(type="image", image_data=b"\xff"),
+            ContentPart(type="text", text="part 2"),
+        ])
+        assert text_content(msg) == "part 1\npart 2"
+
+    def test_text_content_from_empty_parts(self):
+        msg = Message(role="user", content=[])
+        assert text_content(msg) == ""
+
+    def test_content_part_defaults(self):
+        cp = ContentPart(type="image", image_data=b"\xff\xd8")
+        assert cp.mime_type == "image/jpeg"
+        assert cp.text == ""
+
+
+# ── 11. GA message builders ──────────────────────────────────
 
 
 @pytest.mark.asyncio
-class TestIntelligenceLayerTimeout:
-    async def test_hanging_reasoning_agent_is_timed_out(self, db):
-        """A reasoning agent that hangs forever should be killed by
-        _REASON_TIMEOUT, not block the intelligence queue."""
-        from src.intelligence.reasoning_agent import ReasoningAgent
-        from src.storage.models import Action, AppType
+class TestGAMessageBuilders:
+    async def test_build_browser_messages_with_allowlist_label(self, db):
+        agent = _make_agent(db)
+        item = PushItem(kind="event", data={
+            "agent_name": "browser_content",
+            "app_name": "Chrome",
+            "metadata": {
+                "text": "Product X is $50 with 4.5 stars",
+                "url": "https://amazon.com/dp/123",
+                "title": "Product X",
+                "allowlist_label": "Amazon product",
+            },
+        })
+        messages = agent._build_browser_messages(item, "Viewing [Amazon product]: Product X")
 
-        class HangingReasoningAgent(ReasoningAgent):
-            @property
-            def name(self) -> str:
-                return "hanger"
+        assert len(messages) == 2
+        assert messages[0].role == "system"
+        assert "red flags" in messages[0].content
+        assert messages[1].role == "user"
+        assert "Product X is $50" in messages[1].content
+        assert "amazon.com" in messages[1].content
 
-            async def reason(self, event, db):
-                await asyncio.Event().wait()
+    async def test_build_browser_messages_generic(self, db):
+        agent = _make_agent(db)
+        item = PushItem(kind="event", data={
+            "agent_name": "browser_content",
+            "app_name": "Safari",
+            "metadata": {
+                "text": "Some blog post content",
+                "url": "https://blog.example.com",
+                "title": "Blog Post",
+                "allowlist_label": "",
+            },
+        })
+        messages = agent._build_browser_messages(item, "Viewing: Blog Post")
 
-        from src.intelligence.intelligence_layer import IntelligenceLayer
+        assert len(messages) == 2
+        assert "Misleading claims" in messages[0].content
+        assert "Some blog post content" in messages[1].content
 
-        layer = IntelligenceLayer(agents=[HangingReasoningAgent()], db=db)
-        layer._REASON_TIMEOUT = 1  # 1s timeout for testing
+    async def test_build_screen_messages_with_snapshot(self, db, tmp_path):
+        from PIL import Image as PILImage
+        import numpy as np
+        img = PILImage.fromarray(np.zeros((100, 200, 3), dtype=np.uint8))
+        snap = tmp_path / "test.jpg"
+        img.save(str(snap))
 
-        task = asyncio.create_task(layer.run())
+        agent = _make_agent(db)
+        item = PushItem(kind="event", data={
+            "agent_name": "screen_capture",
+            "app_name": "Terminal",
+            "window_name": "zsh",
+            "metadata": {
+                "ocr_text": "$ ls -la",
+                "snapshot_path": str(snap),
+            },
+        })
+        messages = await agent._build_screen_messages(item, "Screen: Terminal — zsh")
 
-        # Seed a frame + event
-        fid = await db.insert_frame(Frame(
-            timestamp="2025-01-01T00:00:00Z", capture_trigger="manual",
-        ))
-        eid = await db.insert_event(fid, Event(
-            agent_name="test", app_type=AppType.IDE, summary="test",
-        ))
+        assert len(messages) == 2
+        assert messages[0].role == "system"
+        user_msg = messages[1]
+        assert isinstance(user_msg.content, list)
+        types = [p.type for p in user_msg.content]
+        assert "image" in types
+        assert "text" in types
+        text_parts = [p.text for p in user_msg.content if p.type == "text"]
+        assert any("ls -la" in t for t in text_parts)
 
-        evt = Event(id=eid, frame_id=fid, agent_name="test",
-                    app_type=AppType.IDE, summary="test")
-        await layer.submit(evt)
+    async def test_build_screen_messages_missing_snapshot(self, db):
+        agent = _make_agent(db)
+        item = PushItem(kind="event", data={
+            "agent_name": "screen_capture",
+            "app_name": "Finder",
+            "window_name": "Desktop",
+            "metadata": {
+                "ocr_text": "file1.txt file2.txt",
+                "snapshot_path": "/nonexistent/path.jpg",
+            },
+        })
+        messages = await agent._build_screen_messages(item, "Screen: Finder — Desktop")
 
-        # Should process (and timeout) within 3s, not hang
-        await asyncio.sleep(2.0)
+        assert len(messages) == 2
+        user_msg = messages[1]
+        assert isinstance(user_msg.content, list)
+        types = [p.type for p in user_msg.content]
+        assert "image" not in types
+        assert "text" in types
 
-        # Push a second event — if the layer is stuck, the queue won't drain
-        await layer.submit(evt)
-        await asyncio.sleep(2.0)
+    async def test_build_generic_messages(self, db):
+        agent = _make_agent(db)
+        item = PushItem(kind="event", data={
+            "agent_name": "some_unknown",
+            "app_name": "Notes",
+            "summary": "User editing notes",
+            "metadata": {"key": "val"},
+        })
+        messages = agent._build_generic_messages(item, "User editing notes")
 
-        # Queue should be empty — both events consumed despite timeouts
-        assert layer._event_queue.empty()
+        assert len(messages) == 2
+        assert "User editing notes" in messages[1].content
 
-        await layer.stop()
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
 
-    async def test_timeout_doesnt_break_working_agents(self, db):
-        """A fast reasoning agent should still work normally with timeouts."""
-        from src.intelligence.reasoning_agent import ReasoningAgent
-        from src.intelligence.intelligence_layer import IntelligenceLayer
-        from src.storage.models import Action, AppType
+# ── 12. Frame prompts ────────────────────────────────────────
 
-        class FastReasoningAgent(ReasoningAgent):
-            @property
-            def name(self) -> str:
-                return "fast"
 
-            async def reason(self, event, db):
-                return Action(
-                    event_id=event.id, frame_id=event.frame_id,
-                    agent_name="fast", action_type="log",
-                    action_description="done fast",
-                )
+class TestFramePrompts:
+    def test_amazon_prompt_exists(self):
+        assert "Amazon product" in FRAME_PROMPTS
+        assert "red flags" in FRAME_PROMPTS["Amazon product"]
 
-        layer = IntelligenceLayer(agents=[FastReasoningAgent()], db=db)
-        task = asyncio.create_task(layer.run())
+    def test_generic_prompt_exists(self):
+        assert "" in FRAME_PROMPTS
+        assert "NOTHING" in FRAME_PROMPTS[""]
 
-        fid = await db.insert_frame(Frame(
-            timestamp="2025-01-01T00:00:00Z", capture_trigger="manual",
-        ))
-        eid = await db.insert_event(fid, Event(
-            agent_name="test", app_type=AppType.IDE, summary="test",
-        ))
+    def test_unknown_label_falls_back_to_generic(self):
+        label = "SomeUnknownSite"
+        prompt = FRAME_PROMPTS.get(label, FRAME_PROMPTS[""])
+        assert "Misleading" in prompt
 
-        await layer.submit(Event(
-            id=eid, frame_id=fid, agent_name="test",
-            app_type=AppType.IDE, summary="test",
-        ))
-        await asyncio.sleep(0.5)
 
-        actions = await db.get_actions_for_event(eid)
-        assert len(actions) == 1
-        assert actions[0]["action_type"] == "log"
+# ── 13. EventFilter: URL-based context for browser_content ────
 
-        await layer.stop()
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
+
+class TestEventFilterContextKey:
+    """Verify that browser_content events use URL (not window title) as the
+    context discriminator, so different products in the same Chrome window
+    are not suppressed."""
+
+    @pytest.mark.asyncio
+    async def test_different_urls_not_suppressed(self, db):
+        """Two browser_content events with different URLs should both be processed."""
+        ws = SpyConnectionManager()
+        call_count = 0
+
+        responses = [
+            "Widget A has suspicious review patterns and only 12 ratings",
+            "Widget B pricing is way below market average for this category",
+        ]
+
+        class SequenceLLM:
+            async def complete(self, messages, **kwargs):
+                nonlocal call_count
+                call_count += 1
+                return Message(role="assistant", content=responses[call_count - 1])
+
+        agent = _make_agent(db, llm=SequenceLLM(), ws_manager=ws)
+        task = await _run_agent_briefly(agent, 0.2)
+
+        await agent.push("event", {
+            "agent_name": "browser_content",
+            "app_name": "Google Chrome",
+            "window_name": "Google Chrome",
+            "summary": "Viewing [Amazon product]: Widget A (amazon.com)",
+            "metadata": {"url": "https://amazon.com/product/111", "title": "Widget A"},
+        })
+        await _wait_queue_empty(agent, timeout=5.0)
+        await asyncio.sleep(0.3)
+
+        await agent.push("event", {
+            "agent_name": "browser_content",
+            "app_name": "Google Chrome",
+            "window_name": "Google Chrome",
+            "summary": "Viewing [Amazon product]: Widget B (amazon.com)",
+            "metadata": {"url": "https://amazon.com/product/222", "title": "Widget B"},
+        })
+        await _wait_queue_empty(agent, timeout=5.0)
+        await asyncio.sleep(0.3)
+
+        proposals = _proposals(ws)
+        assert len(proposals) == 2, f"Expected 2 proposals, got {len(proposals)}: {proposals}"
+
+        await _stop_agent(agent, task)
+
+    @pytest.mark.asyncio
+    async def test_same_url_is_suppressed(self, db):
+        """Two browser_content events with the SAME URL within cooldown should be suppressed."""
+        ws = SpyConnectionManager()
+        llm = StubLLM("interesting finding")
+        agent = _make_agent(db, llm=llm, ws_manager=ws)
+        task = await _run_agent_briefly(agent, 0.2)
+
+        for _ in range(2):
+            await agent.push("event", {
+                "agent_name": "browser_content",
+                "app_name": "Google Chrome",
+                "window_name": "Google Chrome",
+                "summary": "Viewing: Same Page (example.com)",
+                "metadata": {"url": "https://example.com/same-page"},
+            })
+
+        await _wait_queue_empty(agent, timeout=5.0)
+        await asyncio.sleep(0.3)
+
+        assert len(_proposals(ws)) <= 1
+
+        await _stop_agent(agent, task)
+
+    @pytest.mark.asyncio
+    async def test_screen_capture_still_uses_window_name(self, db):
+        """screen_capture events should still use window_name as context key."""
+        ws = SpyConnectionManager()
+        llm = StubLLM("check this out")
+        agent = _make_agent(db, llm=llm, ws_manager=ws)
+        task = await _run_agent_briefly(agent, 0.2)
+
+        for _ in range(2):
+            await agent.push("event", {
+                "agent_name": "screen_capture",
+                "app_name": "Terminal",
+                "window_name": "bash — 80x24",
+                "summary": "Screen: Terminal — bash — 80x24",
+                "metadata": {"ocr_text": "some text"},
+            })
+
+        await _wait_queue_empty(agent, timeout=5.0)
+        await asyncio.sleep(0.3)
+
+        assert len(_proposals(ws)) <= 1
+
+        await _stop_agent(agent, task)
