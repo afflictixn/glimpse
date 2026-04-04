@@ -49,16 +49,19 @@ class EventFilter:
         """Run all filters and return (should_process, importance_score).
 
         Filters execute cheapest-first:
-        1. Fuzzy summary dedup
-        2. Same-context suppression
+        1. Fuzzy summary dedup (skipped for browser_content — URL dedup covers it)
+        2. Same-context suppression (URL-based for browser_content)
         3. Importance scoring
         """
-        if self._is_similar_to_recent(summary):
+        agent = item.data.get("agent_name", "")
+
+        if agent != "browser_content" and self._is_similar_to_recent(summary):
             logger.debug("Filter: fuzzy dedup — %s", summary[:80])
             return False, 0.0
 
         if self._is_same_context(item):
-            logger.debug("Filter: same context — %s", summary[:80])
+            _, disc = self._context_key(item.data)
+            logger.debug("Filter: same context — %s (key=%s)", summary[:80], disc[:60])
             return False, 0.0
 
         importance = self._assess_importance(item)
@@ -104,22 +107,37 @@ class EventFilter:
 
     # ── Same-context suppression ──────────────────────────────
 
+    @staticmethod
+    def _context_key(data: dict) -> tuple[str, str]:
+        """Derive (app, discriminator) for same-context comparison.
+
+        For browser_content the discriminator is the page URL (different
+        products = different context even in the same Chrome window).
+        For everything else it's the macOS window title.
+        """
+        agent = data.get("agent_name", "")
+        app = data.get("app_name", "") or data.get("metadata", {}).get("app", "")
+        if agent == "browser_content":
+            url = data.get("metadata", {}).get("url", "")
+            return (app, url)
+        window = data.get("window_name", "") or ""
+        return (app, window)
+
     def _is_same_context(self, item: PushItem) -> bool:
         data = item.data
         agent = data.get("agent_name", "")
         if not agent:
             return False
 
-        app = data.get("app_name", "") or data.get("metadata", {}).get("app", "")
-        window = data.get("window_name", "") or ""
+        app, discriminator = self._context_key(data)
 
         prev = self._last_context.get(agent)
         if prev is None:
             return False
 
-        prev_app, prev_window, prev_ts = prev
+        prev_app, prev_disc, prev_ts = prev
         cooldown = _CONTEXT_COOLDOWNS.get(agent, _DEFAULT_CONTEXT_COOLDOWN)
-        if app == prev_app and window == prev_window and (time.time() - prev_ts) < cooldown:
+        if app == prev_app and discriminator == prev_disc and (time.time() - prev_ts) < cooldown:
             return True
 
         return False
@@ -129,9 +147,8 @@ class EventFilter:
         agent = data.get("agent_name", "")
         if not agent:
             return
-        app = data.get("app_name", "") or data.get("metadata", {}).get("app", "")
-        window = data.get("window_name", "") or ""
-        self._last_context[agent] = (app, window, time.time())
+        app, discriminator = self._context_key(data)
+        self._last_context[agent] = (app, discriminator, time.time())
 
     # ── Importance scoring ────────────────────────────────────
 

@@ -896,3 +896,105 @@ class TestFramePrompts:
         label = "SomeUnknownSite"
         prompt = FRAME_PROMPTS.get(label, FRAME_PROMPTS[""])
         assert "Misleading" in prompt
+
+
+# ── 14. EventFilter: URL-based context for browser_content ────
+
+
+class TestEventFilterContextKey:
+    """Verify that browser_content events use URL (not window title) as the
+    context discriminator, so different products in the same Chrome window
+    are not suppressed."""
+
+    @pytest.mark.asyncio
+    async def test_different_urls_not_suppressed(self, db):
+        """Two browser_content events with different URLs should both be processed."""
+        ws = SpyConnectionManager()
+        call_count = 0
+
+        responses = [
+            "Widget A has suspicious review patterns and only 12 ratings",
+            "Widget B pricing is way below market average for this category",
+        ]
+
+        class SequenceLLM:
+            async def complete(self, messages, **kwargs):
+                nonlocal call_count
+                call_count += 1
+                return Message(role="assistant", content=responses[call_count - 1])
+
+        agent = _make_agent(db, llm=SequenceLLM(), ws_manager=ws)
+        task = await _run_agent_briefly(agent, 0.2)
+
+        await agent.push("event", {
+            "agent_name": "browser_content",
+            "app_name": "Google Chrome",
+            "window_name": "Google Chrome",
+            "summary": "Viewing [Amazon product]: Widget A (amazon.com)",
+            "metadata": {"url": "https://amazon.com/product/111", "title": "Widget A"},
+        })
+        await _wait_queue_empty(agent, timeout=5.0)
+        await asyncio.sleep(0.3)
+
+        await agent.push("event", {
+            "agent_name": "browser_content",
+            "app_name": "Google Chrome",
+            "window_name": "Google Chrome",
+            "summary": "Viewing [Amazon product]: Widget B (amazon.com)",
+            "metadata": {"url": "https://amazon.com/product/222", "title": "Widget B"},
+        })
+        await _wait_queue_empty(agent, timeout=5.0)
+        await asyncio.sleep(0.3)
+
+        proposals = _proposals(ws)
+        assert len(proposals) == 2, f"Expected 2 proposals, got {len(proposals)}: {proposals}"
+
+        await _stop_agent(agent, task)
+
+    @pytest.mark.asyncio
+    async def test_same_url_is_suppressed(self, db):
+        """Two browser_content events with the SAME URL within cooldown should be suppressed."""
+        ws = SpyConnectionManager()
+        llm = StubLLM("interesting finding")
+        agent = _make_agent(db, llm=llm, ws_manager=ws)
+        task = await _run_agent_briefly(agent, 0.2)
+
+        for _ in range(2):
+            await agent.push("event", {
+                "agent_name": "browser_content",
+                "app_name": "Google Chrome",
+                "window_name": "Google Chrome",
+                "summary": "Viewing: Same Page (example.com)",
+                "metadata": {"url": "https://example.com/same-page"},
+            })
+
+        await _wait_queue_empty(agent, timeout=5.0)
+        await asyncio.sleep(0.3)
+
+        assert len(_proposals(ws)) <= 1
+
+        await _stop_agent(agent, task)
+
+    @pytest.mark.asyncio
+    async def test_screen_capture_still_uses_window_name(self, db):
+        """screen_capture events should still use window_name as context key."""
+        ws = SpyConnectionManager()
+        llm = StubLLM("check this out")
+        agent = _make_agent(db, llm=llm, ws_manager=ws)
+        task = await _run_agent_briefly(agent, 0.2)
+
+        for _ in range(2):
+            await agent.push("event", {
+                "agent_name": "screen_capture",
+                "app_name": "Terminal",
+                "window_name": "bash — 80x24",
+                "summary": "Screen: Terminal — bash — 80x24",
+                "metadata": {"ocr_text": "some text"},
+            })
+
+        await _wait_queue_empty(agent, timeout=5.0)
+        await asyncio.sleep(0.3)
+
+        assert len(_proposals(ws)) <= 1
+
+        await _stop_agent(agent, task)

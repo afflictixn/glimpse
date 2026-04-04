@@ -5,12 +5,19 @@ import asyncio
 import json
 import tempfile
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch, call
 
 import pytest
 from PIL import Image
 
-from src.process.browser_content_agent import BrowserContentAgent
+from src.process.browser_content_agent import (
+    BrowserContentAgent,
+    _chromium_jxa_execute,
+    _chromium_jxa_fallback,
+    _safari_applescript_execute,
+    _safari_applescript_fallback,
+    _EXTRACT_META_ONLY_PAGE_JS,
+)
 from src.storage.models import AppType
 
 
@@ -366,3 +373,206 @@ class TestTruncation:
 
         assert result is not None
         assert len(result.metadata["text"]) <= 4000
+
+
+# ── JXA script builders ──
+
+class TestJxaScriptBuilders:
+    def test_chromium_jxa_execute_contains_app_name(self):
+        script = _chromium_jxa_execute("Google Chrome", "location.href")
+        assert 'Application("Google Chrome")' in script
+        assert ".activeTab.execute(" in script
+        assert "location.href" in script
+
+    def test_chromium_jxa_execute_escapes_quotes(self):
+        script = _chromium_jxa_execute("Arc", 'JSON.stringify({"a":"b"})')
+        assert "Arc" in script
+        assert '\\"a\\"' in script
+
+    def test_chromium_jxa_execute_checks_window_count(self):
+        script = _chromium_jxa_execute("Google Chrome", "1+1")
+        assert "windows.length === 0" in script
+        assert "NO_WINDOWS" in script
+
+    def test_chromium_jxa_fallback_returns_url_title(self):
+        script = _chromium_jxa_fallback("Google Chrome")
+        assert 'Application("Google Chrome")' in script
+        assert "tab.url()" in script
+        assert "tab.title()" in script
+        assert "|||" in script
+
+    def test_safari_applescript_execute_uses_do_javascript(self):
+        script = _safari_applescript_execute("location.href")
+        assert 'tell application "Safari"' in script
+        assert "do JavaScript" in script
+
+    def test_safari_applescript_fallback_uses_current_tab(self):
+        script = _safari_applescript_fallback()
+        assert "current tab of front window" in script
+        assert "|||" in script
+
+    def test_chromium_jxa_escapes_newlines(self):
+        """Multiline page JS must not produce literal newlines in the JXA string."""
+        script = _chromium_jxa_execute("Google Chrome", _EXTRACT_META_ONLY_PAGE_JS)
+        assert "\n" not in script
+        assert "\r" not in script
+        assert "\\n" in script
+
+    def test_safari_applescript_escapes_newlines(self):
+        script = _safari_applescript_execute(_EXTRACT_META_ONLY_PAGE_JS)
+        assert "\n" not in script
+        assert "\r" not in script
+
+
+# ── osascript invocation flags ──
+
+class TestOsascriptFlags:
+    """Verify that Chromium uses JXA (-l JavaScript) and Safari uses plain AppleScript."""
+
+    @pytest.mark.asyncio
+    async def test_chrome_passes_jxa_flag(self, tmp_path):
+        agent = BrowserContentAgent(allowlist_path=_make_allowlist(tmp_path))
+        js_out = _js_result("https://example.com/p", "Test")
+        create_fn, mock_proc = _mock_osascript(js_out)
+
+        captured_calls: list[tuple] = []
+        original_create = create_fn
+
+        async def _capture(*args, **kwargs):
+            captured_calls.append(args)
+            return await original_create(*args, **kwargs)
+
+        with patch("src.process.browser_content_agent.asyncio.create_subprocess_exec", side_effect=_capture):
+            await agent.process(_img(), "", "Google Chrome", "Test")
+
+        assert len(captured_calls) >= 1
+        first_call_args = captured_calls[0]
+        assert first_call_args[0] == "osascript"
+        assert first_call_args[1] == "-l"
+        assert first_call_args[2] == "JavaScript"
+
+    @pytest.mark.asyncio
+    async def test_safari_no_jxa_flag(self, tmp_path):
+        agent = BrowserContentAgent(allowlist_path=_make_allowlist(tmp_path))
+        js_out = _js_result("https://example.com/s", "Safari Test")
+        create_fn, _ = _mock_osascript(js_out)
+
+        captured_calls: list[tuple] = []
+
+        async def _capture(*args, **kwargs):
+            captured_calls.append(args)
+            result = await create_fn(*args, **kwargs)
+            return result
+
+        with patch("src.process.browser_content_agent.asyncio.create_subprocess_exec", side_effect=_capture):
+            await agent.process(_img(), "", "Safari", "Safari Test")
+
+        assert len(captured_calls) >= 1
+        first_call_args = captured_calls[0]
+        assert first_call_args[0] == "osascript"
+        assert "-l" not in first_call_args
+        assert "JavaScript" not in first_call_args
+
+    @pytest.mark.asyncio
+    async def test_arc_passes_jxa_flag(self, tmp_path):
+        """Arc is a Chromium browser and should use JXA."""
+        agent = BrowserContentAgent(allowlist_path=_make_allowlist(tmp_path))
+        js_out = _js_result("https://example.com/a", "Arc Test")
+        create_fn, _ = _mock_osascript(js_out)
+
+        captured_calls: list[tuple] = []
+
+        async def _capture(*args, **kwargs):
+            captured_calls.append(args)
+            return await create_fn(*args, **kwargs)
+
+        with patch("src.process.browser_content_agent.asyncio.create_subprocess_exec", side_effect=_capture):
+            await agent.process(_img(), "", "Arc", "Arc Test")
+
+        first_call_args = captured_calls[0]
+        assert first_call_args[1:3] == ("-l", "JavaScript")
+
+    @pytest.mark.asyncio
+    async def test_chrome_fallback_also_uses_jxa(self, tmp_path):
+        """When JS execution fails, the Chromium fallback should also use JXA."""
+        agent = BrowserContentAgent(allowlist_path=_make_allowlist(tmp_path))
+
+        captured_calls: list[tuple] = []
+        call_count = 0
+
+        async def _create(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            captured_calls.append(args)
+            mock = AsyncMock()
+            if call_count == 1:
+                mock.communicate = AsyncMock(return_value=(b"", b"error"))
+                mock.returncode = 1
+            else:
+                mock.communicate = AsyncMock(
+                    return_value=(b"https://example.com|||Fallback", b"")
+                )
+                mock.returncode = 0
+            mock.kill = MagicMock()
+            return mock
+
+        with patch("src.process.browser_content_agent.asyncio.create_subprocess_exec", side_effect=_create):
+            await agent.process(_img(), "", "Google Chrome", "window")
+
+        for call_args in captured_calls:
+            assert call_args[0] == "osascript"
+            assert call_args[1] == "-l"
+            assert call_args[2] == "JavaScript"
+
+
+# ── Live integration tests (skipped unless Chrome is running with windows) ──
+
+def _chrome_has_windows() -> bool:
+    """Quick check if Chrome has accessible windows via JXA."""
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["osascript", "-l", "JavaScript", "-e",
+             'Application("Google Chrome").windows.length'],
+            capture_output=True, text=True, timeout=3,
+        )
+        return result.returncode == 0 and result.stdout.strip() not in ("0", "")
+    except Exception:
+        return False
+
+
+skip_no_chrome = pytest.mark.skipif(
+    not _chrome_has_windows(),
+    reason="Google Chrome not running or has no windows",
+)
+
+
+@skip_no_chrome
+class TestLiveChromeIntegration:
+    """Integration tests that run against a live Chrome instance."""
+
+    @pytest.mark.asyncio
+    async def test_meta_extraction_returns_url(self, tmp_path):
+        agent = BrowserContentAgent(allowlist_path=_make_allowlist(tmp_path))
+        result = await agent.process(_img(), "", "Google Chrome", "live test")
+        assert result is not None
+        assert result.metadata["url"].startswith("http")
+        assert result.metadata["title"]
+        assert result.metadata["browser"] == "Google Chrome"
+
+    @pytest.mark.asyncio
+    async def test_body_text_extracted(self, tmp_path):
+        agent = BrowserContentAgent(allowlist_path=_make_allowlist(tmp_path))
+        result = await agent.process(_img(), "", "Google Chrome", "live body test")
+        assert result is not None
+        # Non-allowlisted pages should still have text (generic body extraction)
+        if "text" in result.metadata:
+            assert len(result.metadata["text"]) > 0
+
+    @pytest.mark.asyncio
+    async def test_dedup_same_page(self, tmp_path):
+        agent = BrowserContentAgent(allowlist_path=_make_allowlist(tmp_path))
+        r1 = await agent.process(_img(), "", "Google Chrome", "dedup 1")
+        r2 = await agent.process(_img(), "", "Google Chrome", "dedup 2")
+        assert r1 is not None
+        assert r2 is None  # same URL, should be deduped
