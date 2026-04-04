@@ -45,9 +45,6 @@ class Settings:
     llm_model: str = "gpt-5.4-mini"
     llm_reasoning_effort: str | None = "medium"  # None, "low", "medium", "high"
 
-    # General agent
-    importance_filter_enabled: bool = False
-
     # ElevenLabs TTS
     elevenlabs_api_key: str = field(default_factory=lambda: os.getenv("ELEVENLABS_API_KEY", ""))
     elevenlabs_voice_id: str = field(default_factory=lambda: os.getenv("ELEVENLABS_VOICE_ID", "jqcCZkN6Knx8BJ5TBdYR"))

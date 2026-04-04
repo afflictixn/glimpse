@@ -98,7 +98,6 @@ class GeneralAgent:
         llm: LLMClient,
         ws_manager: ConnectionManager | None = None,
         voice: VoiceClient | None = None,
-        importance_filter_enabled: bool = False,
     ) -> None:
         self._db = db
         self._tools = tools
@@ -116,7 +115,7 @@ class GeneralAgent:
         # Conversation history with the user
         self._conversation: deque[ConversationTurn] = deque(maxlen=MAX_CONVERSATION_TURNS)
 
-        self._filter = EventFilter(importance_filter_enabled=importance_filter_enabled)
+        self._filter = EventFilter()
 
         self._running = False
         self._chat_lock = asyncio.Lock()
@@ -253,17 +252,16 @@ class GeneralAgent:
         if not summary:
             return
 
-        should_process, importance = self._filter.should_process(item, summary)
-        if not should_process:
+        if not self._filter.should_process(item, summary):
             logger.debug(
-                "GA frame %s | FILTERED (agent=%s, importance=%.2f, waited %.1fs in queue)",
-                frame_id, agent_name, importance, queue_wait,
+                "GA frame %s | FILTERED (agent=%s, waited %.1fs in queue)",
+                frame_id, agent_name, queue_wait,
             )
             return
 
         logger.debug(
-            "GA frame %s | START processing agent=%s importance=%.2f queue_wait=%.1fs",
-            frame_id, agent_name, importance, queue_wait,
+            "GA frame %s | START processing agent=%s queue_wait=%.1fs",
+            frame_id, agent_name, queue_wait,
         )
 
         notification = await self._analyze_screen_context(item, summary)
@@ -290,8 +288,7 @@ class GeneralAgent:
             "text": notification,
         })
 
-        # Speak high-importance notifications aloud
-        if self._voice and self._voice_enabled and importance >= 0.7:
+        if self._voice and self._voice_enabled:
             asyncio.create_task(self._voice.speak(notification))
 
         self._filter.record_notification(notification)
@@ -490,7 +487,7 @@ class GeneralAgent:
         return ""
 
     async def _enrich(self, item: PushItem) -> str:
-        """Use tools to gather additional context for a high-importance item."""
+        """Use tools to gather additional context for an item."""
         data = item.data
         summary = data.get("summary", "") or data.get("action_description", "")
 

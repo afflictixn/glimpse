@@ -96,7 +96,6 @@ async def run(settings: Settings) -> None:
         llm=llm_client,
         ws_manager=ws_manager,
         voice=voice,
-        importance_filter_enabled=settings.importance_filter_enabled,
     )
 
     trigger_queue: asyncio.Queue[CaptureTrigger] = asyncio.Queue()
