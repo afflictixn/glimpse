@@ -13,10 +13,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var suggestionWindow: NSPanel!
     private var floatingOverlayWindow: KeyablePanel!
     private var chatPanel: KeyablePanel!
+    private var debugPanel: NSPanel!
     private var statusItem: NSStatusItem!
 
     private var overlayState: OverlayState!
     private var chatViewModel: ChatViewModel!
+    private var debugLogModel: DebugLogModel!
     private var wsClient: WebSocketClient!
     private var calendarServer: CalendarServer!
     private var eventMonitor: EventMonitor!
@@ -35,11 +37,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         overlayState = OverlayState()
         chatViewModel = ChatViewModel()
+        debugLogModel = DebugLogModel()
 
         setupEdgeGlowWindow()
         setupSuggestionWindow()
         setupFloatingOverlayWindow()
         setupChatPanel()
+        setupDebugPanel()
         setupStatusBar()
         setupCapturePipeline()
         setupWebSocket()
@@ -209,6 +213,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         chatPanel.orderOut(nil)
     }
 
+    // MARK: - Debug Log Panel (left side, click-through, always on when active)
+
+    private func setupDebugPanel() {
+        guard let screen = NSScreen.main else { return }
+        let visibleFrame = screen.visibleFrame
+
+        let width: CGFloat = 320
+        let origin = CGPoint(x: visibleFrame.minX, y: visibleFrame.minY)
+        let frame = NSRect(origin: origin, size: CGSize(width: width, height: visibleFrame.height))
+
+        debugPanel = NSPanel(
+            contentRect: frame,
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+
+        debugPanel.level = .floating
+        debugPanel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
+        debugPanel.isOpaque = false
+        debugPanel.backgroundColor = .clear
+        debugPanel.hasShadow = false
+        debugPanel.ignoresMouseEvents = true
+        debugPanel.hidesOnDeactivate = false
+        debugPanel.animationBehavior = .none
+
+        let debugView = DebugLogView(model: debugLogModel)
+        let hostingView = NSHostingView(rootView: debugView)
+        debugPanel.contentView = hostingView
+
+        // Hidden until first debug_log arrives
+        debugPanel.orderOut(nil)
+    }
+
+    private func showDebugPanelIfNeeded() {
+        guard !debugLogModel.isActive else { return }
+        // isActive is set true on first log entry; show the panel once
+    }
+
     // MARK: - State Binding
 
     private func bindState() {
@@ -267,6 +310,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         wsClient.onMessage = { [weak self] message in
             Task { @MainActor in
                 guard let self else { return }
+
+                switch message {
+                case .debugLog(let ts, let level, let source, let msg):
+                    self.debugLogModel.append(timestamp: ts, level: level, source: source, message: msg)
+                    if self.debugLogModel.isActive && !self.debugPanel.isVisible {
+                        self.debugPanel.orderFrontRegardless()
+                    }
+                    return
+                default:
+                    break
+                }
+
                 // Feed to chat view model (existing behavior)
                 self.chatViewModel.handleInboundMessage(message)
 
@@ -278,7 +333,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     break // these go straight to chat
                 case .hide:
                     self.overlayState.dismissSuggestion()
-                case .setAssistantLabel:
+                case .setAssistantLabel, .debugLog:
                     break
                 }
             }

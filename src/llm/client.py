@@ -27,4 +27,7 @@ def create_llm_client(provider: str, model: str, **kwargs: object) -> LLMClient:
     if provider == "gemini":
         from src.llm.providers.gemini import GeminiClient
         return GeminiClient(model=model, **kwargs)
+    if provider == "ollama":
+        from src.llm.providers.ollama import OllamaClient
+        return OllamaClient(model=model, **kwargs)
     raise ValueError(f"Unknown LLM provider: {provider!r}")

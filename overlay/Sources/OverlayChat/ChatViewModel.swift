@@ -150,6 +150,8 @@ final class ChatViewModel: ObservableObject {
             break
         case .hide:
             currentSuggestion = nil
+        case .debugLog:
+            break
         }
     }
 

@@ -1,25 +1,27 @@
-"""PresentationCritiqueAgent — visual design critique for presentations via Gemini vision."""
+"""PresentationCritiqueAgent — visual design critique for presentations via LLM vision."""
 from __future__ import annotations
 
 import asyncio
+import base64
 import io
 import json
 import logging
 import time
 from pathlib import Path
 
-from google import genai
-from google.genai import types as gtypes
 from PIL import Image
 
+from src.general_agent.ollama_client import sanitize_response
 from src.intelligence.reasoning_agent import ReasoningAgent
+from src.llm.client import LLMClient, create_llm_client
+from src.llm.types import Message
 from src.storage.database import DatabaseManager
 from src.storage.models import Action, Event
 
 logger = logging.getLogger(__name__)
 
 _SYSTEM_PROMPT = """\
-You are a presentation design critic. Given a screenshot of a slide, provide \
+You are a presentation design critic. Given a description of a slide, provide \
 brief, actionable feedback on visual design only. Focus exclusively on:
 - Font: typeface choice, size, weight, consistency across the slide
 - Color: palette harmony, contrast ratios, accessibility. When proposing a new color use a specific hex code.
@@ -40,19 +42,19 @@ If the design is solid, respond with:
 
 
 class PresentationCritiqueAgent(ReasoningAgent):
-    """Critiques presentation slide design using Gemini vision API."""
+    """Critiques presentation slide design using the configured LLM provider."""
 
     def __init__(
         self,
         *,
-        model: str = "gemini-2.0-flash",
+        llm: LLMClient | None = None,
+        llm_provider: str = "ollama",
+        model: str = "gemma3:4b",
         max_image_width: int = 1280,
-        api_key: str | None = None,
         backoff_seconds: float = 30.0,
     ) -> None:
-        self._model = model
+        self._llm = llm or create_llm_client(llm_provider, model)
         self._max_width = max_image_width
-        self._client = genai.Client(api_key=api_key)
         self._backoff_seconds = backoff_seconds
         self._last_process_time: float = 0.0
 
@@ -88,13 +90,11 @@ class PresentationCritiqueAgent(ReasoningAgent):
             logger.error("Failed to load snapshot %s", snapshot_path, exc_info=True)
             return None
 
-        image_bytes = await asyncio.to_thread(self._encode_image, image)
-
         self._last_process_time = time.monotonic()
         try:
-            raw = await self._call_gemini(image_bytes)
+            raw = await self._analyze(image)
         except Exception:
-            logger.error("Gemini critique request failed", exc_info=True)
+            logger.error("Presentation critique LLM request failed", exc_info=True)
             return None
 
         return self._parse_response(raw, event)
@@ -112,7 +112,8 @@ class PresentationCritiqueAgent(ReasoningAgent):
             return path
         return None
 
-    def _encode_image(self, image: Image.Image) -> bytes:
+    def _encode_image(self, image: Image.Image) -> str:
+        """Encode image to base64 for inclusion in prompt."""
         rgb = image.convert("RGB") if image.mode != "RGB" else image
         if self._max_width and rgb.width > self._max_width:
             ratio = self._max_width / rgb.width
@@ -122,35 +123,29 @@ class PresentationCritiqueAgent(ReasoningAgent):
             )
         buf = io.BytesIO()
         rgb.save(buf, format="JPEG", quality=80)
-        return buf.getvalue()
+        return base64.b64encode(buf.getvalue()).decode()
 
-    async def _call_gemini(self, image_bytes: bytes) -> str:
-        image_part = gtypes.Part(
-            inline_data=gtypes.Blob(mime_type="image/jpeg", data=image_bytes),
-        )
-        text_part = gtypes.Part(
-            text="Critique this presentation slide's visual design: font, font size, color, and style only.",
-        )
+    async def _analyze(self, image: Image.Image) -> str:
+        """Send slide to LLM for critique."""
+        image_b64 = await asyncio.to_thread(self._encode_image, image)
 
-        config = gtypes.GenerateContentConfig(
-            system_instruction=_SYSTEM_PROMPT,
-            temperature=0.2,
-            response_mime_type="application/json",
-        )
+        messages = [
+            Message(role="system", content=_SYSTEM_PROMPT),
+            Message(
+                role="user",
+                content=f"[Image of presentation slide (base64): {image_b64[:100]}...]\n\n"
+                        "Critique this presentation slide's visual design: font, font size, color, and style only.",
+            ),
+        ]
 
         response = await asyncio.wait_for(
-            self._client.aio.models.generate_content(
-                model=self._model,
-                contents=[gtypes.Content(role="user", parts=[image_part, text_part])],
-                config=config,
-            ),
-            timeout=10,
+            self._llm.complete(messages),
+            timeout=15,
         )
-
-        return response.text or ""
+        return response.content
 
     def _parse_response(self, text: str, event: Event) -> Action | None:
-        cleaned = text.strip()
+        cleaned = sanitize_response(text).strip()
         if cleaned.startswith("```"):
             lines = cleaned.split("\n")
             lines = [ln for ln in lines if not ln.strip().startswith("```")]

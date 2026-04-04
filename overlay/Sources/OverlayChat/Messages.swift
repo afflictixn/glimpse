@@ -8,6 +8,7 @@ enum InboundMessage {
     case appendConversation(role: String, text: String)
     case setAssistantLabel(label: String)
     case hide
+    case debugLog(timestamp: String, level: String, source: String, message: String)
 }
 
 extension InboundMessage {
@@ -31,6 +32,12 @@ extension InboundMessage {
             self = .setAssistantLabel(label: label)
         case "hide":
             self = .hide
+        case "debug_log":
+            let ts = obj["ts"] as? String ?? ""
+            let level = obj["level"] as? String ?? "INFO"
+            let source = obj["source"] as? String ?? ""
+            let msg = obj["msg"] as? String ?? ""
+            self = .debugLog(timestamp: ts, level: level, source: source, message: msg)
         default:
             return nil
         }

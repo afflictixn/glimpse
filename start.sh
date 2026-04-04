@@ -25,6 +25,27 @@ kill_all() {
     echo -e "${GREEN}All stopped.${NC}"
 }
 
+# Parse flags (can combine: ./start.sh --verbose --gemini)
+VERBOSE=""
+PROVIDER=""
+while [[ "$1" == --* ]]; do
+    case "$1" in
+        --verbose|-v)
+            VERBOSE="--debug"
+            echo -e "${YELLOW}Verbose mode: debug logs → overlay left panel${NC}"
+            shift ;;
+        --gemini)
+            PROVIDER="--provider gemini"
+            echo -e "${YELLOW}Provider: Gemini (cloud)${NC}"
+            shift ;;
+        --ollama|--local)
+            PROVIDER="--provider ollama"
+            echo -e "${YELLOW}Provider: Ollama (local)${NC}"
+            shift ;;
+        *) break ;;
+    esac
+done
+
 # Kill mode
 if [ "$1" = "--kill" ] || [ "$1" = "-k" ]; then
     kill_all
@@ -60,7 +81,7 @@ if [ "$1" = "--restart" ] || [ "$1" = "-r" ]; then
                 pkill -f "src.main" 2>/dev/null || true
                 sleep 1
                 source .venv/bin/activate 2>/dev/null || true
-                python -m src.main --port 3030 > /tmp/zexp-backend.log 2>&1 &
+                python -m src.main --port 3030 $VERBOSE $PROVIDER > /tmp/zexp-backend.log 2>&1 &
                 sleep 2
                 if curl -s http://localhost:3030/health > /dev/null 2>&1; then
                     echo -e "  ${GREEN}✓${NC} Backend restarted (port 3030)"
@@ -136,7 +157,7 @@ if curl -s http://localhost:3030/health > /dev/null 2>&1; then
 else
     echo -e "  ${YELLOW}→${NC} Starting Z Exp backend..."
     source .venv/bin/activate 2>/dev/null || true
-    python -m src.main --port 3030 > /tmp/zexp-backend.log 2>&1 &
+    python -m src.main --port 3030 $VERBOSE $PROVIDER > /tmp/zexp-backend.log 2>&1 &
     sleep 2
     if curl -s http://localhost:3030/health > /dev/null 2>&1; then
         echo -e "  ${GREEN}✓${NC} Z Exp backend started (port 3030)"

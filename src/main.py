@@ -44,6 +44,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-db-size-mb", type=int, default=_DEFAULTS.max_db_size_mb, help="Max database size in MB")
     parser.add_argument("--log-level", type=str, default="INFO", help="Logging level")
     parser.add_argument("--debug", action="store_true", help="Enable debug logging for Z Exp internals (suppresses third-party noise)")
+    parser.add_argument("--provider", type=str, default=None, help="Set BOTH vision and LLM provider at once: gemini, openai, or ollama")
     parser.add_argument("--vision-provider", type=str, default=_DEFAULTS.vision_provider, help="Vision agent provider: gemini, openai, or ollama")
     parser.add_argument("--gemini-vision-model", type=str, default=_DEFAULTS.gemini_vision_model, help="Gemini model for vision processing")
     parser.add_argument("--openai-vision-model", type=str, default=_DEFAULTS.openai_vision_model, help="OpenAI model for vision processing")
@@ -52,7 +53,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ollama-url", type=str, default=_DEFAULTS.ollama_base_url, help="Ollama server base URL")
     parser.add_argument("--include-ocr", action="store_true", help="Include OCR text in Gemma agent prompt")
     parser.add_argument("--max-image-width", type=int, default=_DEFAULTS.ollama_max_image_width, help="Max image width sent to Ollama vision model")
-    parser.add_argument("--llm-provider", type=str, default=_DEFAULTS.llm_provider, help="LLM provider: openai or gemini")
+    parser.add_argument("--llm-provider", type=str, default=_DEFAULTS.llm_provider, help="LLM provider: openai, gemini, or ollama")
     parser.add_argument("--llm-model", type=str, default=_DEFAULTS.llm_model, help="LLM model name")
     parser.add_argument("--llm-reasoning-effort", type=str, default=_DEFAULTS.llm_reasoning_effort, help="Reasoning effort: low, medium, high, or none to disable")
     return parser.parse_args()
@@ -128,7 +129,7 @@ async def run(settings: Settings) -> None:
     ws_manager = ConnectionManager()
 
     reasoning_agents: list[ReasoningAgent] = [
-        # PresentationCritiqueAgent(model=settings.llm_model),
+        PresentationCritiqueAgent(llm=llm_client),
     ]
     general_agent = GeneralAgent(
         db=db,
@@ -197,6 +198,14 @@ async def run(settings: Settings) -> None:
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, handle_signal)
 
+    # Attach WS debug log handler when running with --debug
+    if settings.debug:
+        from src.debug.ws_log_handler import WsLogHandler
+        ws_handler = WsLogHandler(ws_manager, asyncio.get_running_loop())
+        for name in ("src", "zexp"):
+            logging.getLogger(name).addHandler(ws_handler)
+        logger.info("Debug log streaming enabled → overlay left panel")
+
     server_task = asyncio.create_task(server.serve())
     event_tap.start()
     capture_task = asyncio.create_task(capture_loop.run())
@@ -253,13 +262,24 @@ def main() -> None:
     args = parse_args()
     _configure_logging(args)
 
+    # --provider sets both vision and LLM provider at once
+    vision_provider = args.provider or args.vision_provider
+    llm_provider = args.provider or args.llm_provider
+
+    # Auto-pick model when using --provider shortcut
+    llm_model = args.llm_model
+    if args.provider == "ollama" and llm_model == _DEFAULTS.llm_model and _DEFAULTS.llm_provider != "ollama":
+        llm_model = args.ollama_model
+    elif args.provider == "gemini" and llm_model == _DEFAULTS.llm_model and _DEFAULTS.llm_provider != "gemini":
+        llm_model = args.gemini_vision_model
+
     settings = Settings(
         port=args.port,
         data_dir=Path(args.data_dir),
         jpeg_quality=args.jpeg_quality,
         max_retention_days=args.retention_days,
         max_db_size_mb=args.max_db_size_mb,
-        vision_provider=args.vision_provider,
+        vision_provider=vision_provider,
         gemini_vision_model=args.gemini_vision_model,
         openai_vision_model=args.openai_vision_model,
         openai_image_detail=args.openai_image_detail,
@@ -267,8 +287,8 @@ def main() -> None:
         ollama_model=args.ollama_model,
         include_ocr=args.include_ocr,
         ollama_max_image_width=args.max_image_width,
-        llm_provider=args.llm_provider,
-        llm_model=args.llm_model,
+        llm_provider=llm_provider,
+        llm_model=llm_model,
         llm_reasoning_effort=args.llm_reasoning_effort if args.llm_reasoning_effort != "none" else None,
         debug=args.debug,
     )

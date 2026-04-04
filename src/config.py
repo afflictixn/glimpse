@@ -17,7 +17,7 @@ class Settings:
 
     # Capture timing
     poll_interval_ms: int = 250
-    min_capture_interval_ms: int = 2000
+    min_capture_interval_ms: int = 1000
     idle_capture_interval_ms: int = 30_000
     typing_pause_delay_ms: int = 500
     visual_check_interval_ms: int = 3_000
@@ -30,7 +30,7 @@ class Settings:
     cleanup_interval_hours: int = 1
 
     # Vision process agent
-    vision_provider: str = "openai"  # "gemini", "openai", or "ollama"
+    vision_provider: str = "ollama"  # "gemini", "openai", or "ollama"
     gemini_vision_model: str = "gemini-3-flash-preview"
     openai_vision_model: str = "gpt-5.4-nano"
     openai_image_detail: str = "low"
@@ -41,8 +41,8 @@ class Settings:
     ollama_timeout_s: int = 30
     ollama_max_image_width: int = 960
     # LLM (general agent)
-    llm_provider: str = "openai"  # "openai" or "gemini"
-    llm_model: str = "gpt-5.4-mini"
+    llm_provider: str = "ollama"  # "openai", "gemini", or "ollama"
+    llm_model: str = "gemma3:4b"
     llm_reasoning_effort: str | None = "medium"  # None, "low", "medium", "high"
 
     # General agent
