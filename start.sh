@@ -59,7 +59,7 @@ if [ "$1" = "--restart" ] || [ "$1" = "-r" ]; then
                 echo -e "${YELLOW}Restarting backend...${NC}"
                 pkill -f "src.main" 2>/dev/null || true
                 sleep 1
-                source venv/bin/activate 2>/dev/null || true
+                source .venv/bin/activate 2>/dev/null || true
                 python -m src.main --port 3030 > /tmp/zexp-backend.log 2>&1 &
                 sleep 2
                 if curl -s http://localhost:3030/health > /dev/null 2>&1; then
@@ -94,6 +94,7 @@ fi
 echo -e "${GREEN}Starting Z Exp...${NC}"
 
 # 1. Ollama (only needed for ollama vision provider)
+source .venv/bin/activate 2>/dev/null || true
 VISION_PROVIDER=$(python -c "from src.config import Settings; print(Settings().vision_provider)" 2>/dev/null || echo "unknown")
 if [ "$VISION_PROVIDER" = "ollama" ]; then
     if curl -s http://localhost:11434/api/tags > /dev/null 2>&1; then
@@ -134,7 +135,7 @@ if curl -s http://localhost:3030/health > /dev/null 2>&1; then
     echo -e "  ${GREEN}✓${NC} Z Exp backend already running"
 else
     echo -e "  ${YELLOW}→${NC} Starting Z Exp backend..."
-    source venv/bin/activate 2>/dev/null || true
+    source .venv/bin/activate 2>/dev/null || true
     python -m src.main --port 3030 > /tmp/zexp-backend.log 2>&1 &
     sleep 2
     if curl -s http://localhost:3030/health > /dev/null 2>&1; then

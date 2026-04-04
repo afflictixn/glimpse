@@ -22,11 +22,11 @@ NOTIFICATION_WINDOW_S = 120.0
 IMPORTANCE_THRESHOLD = 0.5
 
 _CONTEXT_COOLDOWNS: dict[str, float] = {
-    "gemma3": 120.0,
-    "gemini_vision": 120.0,
-    "openai_vision": 120.0,
+    "gemma3": 60.0,
+    "gemini_vision": 60.0,
+    "openai_vision": 60.0,
 }
-_DEFAULT_CONTEXT_COOLDOWN = 90.0
+_DEFAULT_CONTEXT_COOLDOWN = 60.0
 
 _HIGH_SIGNAL_ACTION_TYPES = frozenset({
     "flag", "escalate", "warn", "alert",

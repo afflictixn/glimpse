@@ -413,8 +413,8 @@ class GeneralAgent:
     _PROCESS_ITEM_TIMEOUT = 30  # max seconds for filter + LLM + ws_send per item
     _LLM_CALL_TIMEOUT = 20     # max seconds for a single LLM completion
     _TOOL_CALL_TIMEOUT = 15    # max seconds for a single tool execution
-    _STALE_ITEM_S = 10         # drop queued items older than this many seconds
-    _MAX_QUEUE_DEPTH = 3       # when queue exceeds this, drain to only the newest items
+    _STALE_ITEM_S = 30         # drop queued items older than this many seconds
+    _MAX_QUEUE_DEPTH = 10      # when queue exceeds this, drain to only the newest items
 
     # ── WebSocket broadcast to overlay / browser clients ────────
 
