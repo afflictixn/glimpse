@@ -1,6 +1,8 @@
 #!/bin/bash
 # Z Exp — start all services
-# Usage: ./start.sh [--kill]
+# Usage: ./start.sh [--debug|-d] [--verbose|-v] [--kill]
+#   --debug/-d   : debug logs in terminal/log file only
+#   --verbose/-v : debug logs in terminal + overlay sidebar
 
 set -e
 cd "$(dirname "$0")"
@@ -25,14 +27,18 @@ kill_all() {
     echo -e "${GREEN}All stopped.${NC}"
 }
 
-# Parse flags (can combine: ./start.sh --verbose --gemini)
-VERBOSE=""
+# Parse flags (can combine: ./start.sh --debug --gemini)
+DEBUG_FLAGS=""
 PROVIDER=""
 while [[ "$1" == --* ]]; do
     case "$1" in
+        --debug|-d)
+            DEBUG_FLAGS="--debug"
+            echo -e "${YELLOW}Debug mode: debug logs → terminal / log file${NC}"
+            shift ;;
         --verbose|-v)
-            VERBOSE="--debug"
-            echo -e "${YELLOW}Verbose mode: debug logs → overlay left panel${NC}"
+            DEBUG_FLAGS="--debug --debug-ws"
+            echo -e "${YELLOW}Verbose mode: debug logs → terminal + overlay sidebar${NC}"
             shift ;;
         --gemini)
             PROVIDER="--provider gemini"
@@ -81,7 +87,7 @@ if [ "$1" = "--restart" ] || [ "$1" = "-r" ]; then
                 pkill -f "src.main" 2>/dev/null || true
                 sleep 1
                 source .venv/bin/activate 2>/dev/null || true
-                python -m src.main --port 3030 $VERBOSE $PROVIDER > /tmp/zexp-backend.log 2>&1 &
+                python -m src.main --port 3030 $DEBUG_FLAGS $PROVIDER > /tmp/zexp-backend.log 2>&1 &
                 sleep 2
                 if curl -s http://localhost:3030/health > /dev/null 2>&1; then
                     echo -e "  ${GREEN}✓${NC} Backend restarted (port 3030)"
@@ -157,7 +163,7 @@ if curl -s http://localhost:3030/health > /dev/null 2>&1; then
 else
     echo -e "  ${YELLOW}→${NC} Starting Z Exp backend..."
     source .venv/bin/activate 2>/dev/null || true
-    python -m src.main --port 3030 $VERBOSE $PROVIDER > /tmp/zexp-backend.log 2>&1 &
+    python -m src.main --port 3030 $DEBUG_FLAGS $PROVIDER > /tmp/zexp-backend.log 2>&1 &
     sleep 2
     if curl -s http://localhost:3030/health > /dev/null 2>&1; then
         echo -e "  ${GREEN}✓${NC} Z Exp backend started (port 3030)"

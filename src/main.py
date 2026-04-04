@@ -37,6 +37,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-db-size-mb", type=int, default=_DEFAULTS.max_db_size_mb, help="Max database size in MB")
     parser.add_argument("--log-level", type=str, default="INFO", help="Logging level")
     parser.add_argument("--debug", action="store_true", help="Enable debug logging for Z Exp internals (suppresses third-party noise)")
+    parser.add_argument("--debug-ws", action="store_true", help="Also stream debug logs to overlay sidebar (requires --debug)")
     parser.add_argument("--llm-provider", type=str, default=_DEFAULTS.llm_provider, help="LLM provider: openai, gemini, or ollama")
     parser.add_argument("--llm-model", type=str, default=_DEFAULTS.llm_model, help="LLM model name")
     parser.add_argument("--llm-reasoning-effort", type=str, default=_DEFAULTS.llm_reasoning_effort, help="Reasoning effort: low, medium, high, or none to disable")
@@ -149,8 +150,7 @@ async def run(settings: Settings) -> None:
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, handle_signal)
 
-    # Attach WS debug log handler when running with --debug
-    if settings.debug:
+    if settings.debug_ws:
         from src.debug.ws_log_handler import WsLogHandler
         ws_handler = WsLogHandler(ws_manager, asyncio.get_running_loop())
         for name in ("src", "zexp"):
@@ -219,7 +219,8 @@ def main() -> None:
         llm_provider=args.llm_provider,
         llm_model=args.llm_model,
         llm_reasoning_effort=args.llm_reasoning_effort if args.llm_reasoning_effort != "none" else None,
-        debug=args.debug,
+        debug=args.debug or args.debug_ws,
+        debug_ws=args.debug_ws,
     )
 
     asyncio.run(run(settings))

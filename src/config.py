@@ -53,6 +53,7 @@ class Settings:
 
     # Debug
     debug: bool = False
+    debug_ws: bool = False
 
     @property
     def db_path(self) -> Path:
