@@ -23,9 +23,6 @@ NOTIFICATION_WINDOW_S = 120.0
 _CONTEXT_COOLDOWNS: dict[str, float] = {
     "browser_content": 45.0,
     "screen_capture": 60.0,
-    "gemma3": 60.0,
-    "gemini_vision": 60.0,
-    "openai_vision": 60.0,
 }
 _DEFAULT_CONTEXT_COOLDOWN = 60.0
 
