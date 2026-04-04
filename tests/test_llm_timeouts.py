@@ -4,7 +4,6 @@ Verifies that hanging LLM providers don't freeze the pipeline:
   - GeminiClient and OpenAIClient raise TimeoutError when the provider hangs
   - GeneralAgent keeps processing after an LLM timeout
   - process_frame completes even when a vision agent times out
-  - IntelligenceLayer keeps processing after a reasoning agent LLM timeout
 """
 from __future__ import annotations
 
@@ -28,11 +27,9 @@ skip_no_openai = pytest.mark.skipif(not _has_openai, reason="openai not installe
 
 from src.general_agent.agent import GeneralAgent, PushItem
 from src.general_agent.tools import ToolRegistry
-from src.intelligence.intelligence_layer import IntelligenceLayer
-from src.intelligence.reasoning_agent import ReasoningAgent
 from src.llm.types import Message, ToolSpec
 from src.storage.database import DatabaseManager
-from src.storage.models import Action, AppType, Event, Frame, OCRResult
+from src.storage.models import AppType, Event, Frame, OCRResult
 
 
 # ── Stubs ─────────────────────────────────────────────────────
@@ -409,114 +406,7 @@ class TestProcessFrameTimeout:
         assert len(ocr) == 1
 
 
-# ── 4. IntelligenceLayer resilience ──────────────────────────
-
-
-class TimedOutReasoningAgent(ReasoningAgent):
-    """Reasoning agent whose LLM call always times out."""
-
-    def __init__(self):
-        self.call_count = 0
-
-    @property
-    def name(self) -> str:
-        return "timed_out_reasoner"
-
-    async def reason(self, event: Event, db: DatabaseManager) -> Action | None:
-        self.call_count += 1
-        raise TimeoutError("LLM provider timed out")
-
-
-class WorkingReasoningAgent(ReasoningAgent):
-    """Reasoning agent that always returns an action."""
-
-    @property
-    def name(self) -> str:
-        return "working_reasoner"
-
-    async def reason(self, event: Event, db: DatabaseManager) -> Action | None:
-        return Action(
-            event_id=event.id,
-            frame_id=event.frame_id,
-            agent_name=self.name,
-            action_type="test",
-            action_description="found something",
-        )
-
-
-@pytest.mark.asyncio
-class TestIntelligenceLayerTimeout:
-    async def test_timeout_agent_doesnt_block_layer(self, db):
-        """A reasoning agent that times out should not prevent the
-        IntelligenceLayer from processing subsequent events."""
-        timeout_agent = TimedOutReasoningAgent()
-        layer = IntelligenceLayer(agents=[timeout_agent], db=db)
-        task = asyncio.create_task(layer.run())
-
-        fid = await db.insert_frame(Frame(
-            timestamp="2025-01-01T00:00:00Z", capture_trigger="manual",
-        ))
-
-        for i in range(3):
-            evt = Event(
-                agent_name="test", app_type=AppType.BROWSER,
-                summary=f"event {i}", frame_id=fid,
-            )
-            evt.id = i + 1
-            await layer.submit(evt)
-
-        # All 3 events should be consumed
-        deadline = time.monotonic() + 5.0
-        while not layer._event_queue.empty():
-            assert time.monotonic() < deadline, "IntelligenceLayer stalled on timeout"
-            await asyncio.sleep(0.1)
-        await asyncio.sleep(0.3)
-
-        assert timeout_agent.call_count == 3
-        await layer.stop()
-        task.cancel()
-        try:
-            await task
-        except (asyncio.CancelledError, Exception):
-            pass
-
-    async def test_working_agent_unaffected_by_timed_out_sibling(self, db):
-        """When one reasoning agent times out, a sibling agent should
-        still produce its action."""
-        timeout_agent = TimedOutReasoningAgent()
-        working_agent = WorkingReasoningAgent()
-        layer = IntelligenceLayer(
-            agents=[timeout_agent, working_agent], db=db
-        )
-        task = asyncio.create_task(layer.run())
-
-        fid = await db.insert_frame(Frame(
-            timestamp="2025-01-01T00:00:00Z", capture_trigger="manual",
-        ))
-        evt = Event(
-            agent_name="test", app_type=AppType.BROWSER,
-            summary="test event", frame_id=fid,
-        )
-        evt.id = 1
-        await db.insert_event(fid, evt)
-        await layer.submit(evt)
-
-        await asyncio.sleep(1.0)
-
-        # Working agent's action should be in the DB despite sibling timeout
-        actions = await db.search_actions(query="found something", limit=10)
-        assert len(actions) >= 1
-        assert actions[0]["agent_name"] == "working_reasoner"
-
-        await layer.stop()
-        task.cancel()
-        try:
-            await task
-        except (asyncio.CancelledError, Exception):
-            pass
-
-
-# ── 5. GeminiVisionAgent timeout ─────────────────────────────
+# ── 4. GeminiVisionAgent timeout ─────────────────────────────
 
 
 @pytest.mark.asyncio

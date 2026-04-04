@@ -646,108 +646,7 @@ class TestWSEndpointErrorBoundary:
         assert "couldn't generate" in convos[0]["text"].lower()
 
 
-# ── 10. IntelligenceLayer reasoning timeout ──────────────────
-
-
-@pytest.mark.asyncio
-class TestIntelligenceLayerTimeout:
-    async def test_hanging_reasoning_agent_is_timed_out(self, db):
-        """A reasoning agent that hangs forever should be killed by
-        _REASON_TIMEOUT, not block the intelligence queue."""
-        from src.intelligence.reasoning_agent import ReasoningAgent
-        from src.storage.models import Action, AppType
-
-        class HangingReasoningAgent(ReasoningAgent):
-            @property
-            def name(self) -> str:
-                return "hanger"
-
-            async def reason(self, event, db):
-                await asyncio.Event().wait()
-
-        from src.intelligence.intelligence_layer import IntelligenceLayer
-
-        layer = IntelligenceLayer(agents=[HangingReasoningAgent()], db=db)
-        layer._REASON_TIMEOUT = 1  # 1s timeout for testing
-
-        task = asyncio.create_task(layer.run())
-
-        # Seed a frame + event
-        fid = await db.insert_frame(Frame(
-            timestamp="2025-01-01T00:00:00Z", capture_trigger="manual",
-        ))
-        eid = await db.insert_event(fid, Event(
-            agent_name="test", app_type=AppType.IDE, summary="test",
-        ))
-
-        evt = Event(id=eid, frame_id=fid, agent_name="test",
-                    app_type=AppType.IDE, summary="test")
-        await layer.submit(evt)
-
-        # Should process (and timeout) within 3s, not hang
-        await asyncio.sleep(2.0)
-
-        # Push a second event — if the layer is stuck, the queue won't drain
-        await layer.submit(evt)
-        await asyncio.sleep(2.0)
-
-        # Queue should be empty — both events consumed despite timeouts
-        assert layer._event_queue.empty()
-
-        await layer.stop()
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
-
-    async def test_timeout_doesnt_break_working_agents(self, db):
-        """A fast reasoning agent should still work normally with timeouts."""
-        from src.intelligence.reasoning_agent import ReasoningAgent
-        from src.intelligence.intelligence_layer import IntelligenceLayer
-        from src.storage.models import Action, AppType
-
-        class FastReasoningAgent(ReasoningAgent):
-            @property
-            def name(self) -> str:
-                return "fast"
-
-            async def reason(self, event, db):
-                return Action(
-                    event_id=event.id, frame_id=event.frame_id,
-                    agent_name="fast", action_type="log",
-                    action_description="done fast",
-                )
-
-        layer = IntelligenceLayer(agents=[FastReasoningAgent()], db=db)
-        task = asyncio.create_task(layer.run())
-
-        fid = await db.insert_frame(Frame(
-            timestamp="2025-01-01T00:00:00Z", capture_trigger="manual",
-        ))
-        eid = await db.insert_event(fid, Event(
-            agent_name="test", app_type=AppType.IDE, summary="test",
-        ))
-
-        await layer.submit(Event(
-            id=eid, frame_id=fid, agent_name="test",
-            app_type=AppType.IDE, summary="test",
-        ))
-        await asyncio.sleep(0.5)
-
-        actions = await db.get_actions_for_event(eid)
-        assert len(actions) == 1
-        assert actions[0]["action_type"] == "log"
-
-        await layer.stop()
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
-
-
-# ── 11. ContentPart / multimodal types ────────────────────────
+# ── 10. ContentPart / multimodal types ────────────────────────
 
 
 class TestContentPartTypes:
@@ -773,7 +672,7 @@ class TestContentPartTypes:
         assert cp.text == ""
 
 
-# ── 12. GA message builders ──────────────────────────────────
+# ── 11. GA message builders ──────────────────────────────────
 
 
 @pytest.mark.asyncio
@@ -880,7 +779,7 @@ class TestGAMessageBuilders:
         assert "User editing notes" in messages[1].content
 
 
-# ── 13. Frame prompts ────────────────────────────────────────
+# ── 12. Frame prompts ────────────────────────────────────────
 
 
 class TestFramePrompts:
@@ -898,7 +797,7 @@ class TestFramePrompts:
         assert "Misleading" in prompt
 
 
-# ── 14. EventFilter: URL-based context for browser_content ────
+# ── 13. EventFilter: URL-based context for browser_content ────
 
 
 class TestEventFilterContextKey:

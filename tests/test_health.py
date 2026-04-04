@@ -1,5 +1,5 @@
 """Lightweight system health tests covering models, DB, frame comparison,
-activity feed, intelligence layer, and API endpoints end-to-end."""
+activity feed, and API endpoints end-to-end."""
 
 from __future__ import annotations
 
@@ -16,8 +16,6 @@ from PIL import Image
 from src.capture.activity_feed import ActivityFeed
 from src.capture.event_tap import ActivityKind, CaptureTrigger
 from src.capture.frame_compare import FrameComparer
-from src.intelligence.intelligence_layer import IntelligenceLayer
-from src.intelligence.reasoning_agent import ReasoningAgent
 from src.storage.database import DatabaseManager
 from src.storage.models import Action, AdditionalContext, AppType, Event, Frame, OCRResult
 
@@ -213,83 +211,6 @@ class TestActivityFeed:
         feed = ActivityFeed(typing_pause_delay_ms=500, idle_capture_interval_ms=100)
         feed.mark_captured()
         assert feed.poll() is None
-
-
-# ── Intelligence Layer ──
-
-
-class StubReasoningAgent(ReasoningAgent):
-    def __init__(self, action: Action | None = None):
-        self._action = action
-
-    @property
-    def name(self) -> str:
-        return "stub"
-
-    async def reason(self, event: Event, db: DatabaseManager) -> Action | None:
-        return self._action
-
-
-class FailingReasoningAgent(ReasoningAgent):
-    @property
-    def name(self) -> str:
-        return "failing"
-
-    async def reason(self, event: Event, db: DatabaseManager) -> Action | None:
-        raise RuntimeError("intentional failure")
-
-
-@pytest.mark.asyncio
-class TestIntelligenceLayer:
-    async def test_submit_and_process(self, db: DatabaseManager):
-        fid = await db.insert_frame(Frame(
-            timestamp="2025-01-01T00:00:00Z", capture_trigger="manual",
-        ))
-        eid = await db.insert_event(fid, Event(
-            agent_name="a", app_type=AppType.IDE, summary="test",
-        ))
-        action = Action(
-            event_id=eid, frame_id=fid, agent_name="stub",
-            action_type="log", action_description="logged something",
-        )
-        layer = IntelligenceLayer(agents=[StubReasoningAgent(action)], db=db)
-        task = asyncio.create_task(layer.run())
-
-        evt = Event(id=eid, frame_id=fid, agent_name="a",
-                    app_type=AppType.IDE, summary="test")
-        await layer.submit(evt)
-        await asyncio.sleep(0.3)
-        await layer.stop()
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
-
-        actions = await db.get_actions_for_event(eid)
-        assert len(actions) == 1
-        assert actions[0]["action_type"] == "log"
-
-    async def test_failing_agent_does_not_crash(self, db: DatabaseManager):
-        fid = await db.insert_frame(Frame(
-            timestamp="2025-01-01T00:00:00Z", capture_trigger="manual",
-        ))
-        eid = await db.insert_event(fid, Event(
-            agent_name="a", app_type=AppType.IDE, summary="test",
-        ))
-        layer = IntelligenceLayer(agents=[FailingReasoningAgent()], db=db)
-        task = asyncio.create_task(layer.run())
-
-        await layer.submit(Event(id=eid, frame_id=fid, agent_name="a",
-                                 app_type=AppType.IDE, summary="test"))
-        await asyncio.sleep(0.3)
-        await layer.stop()
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
-        # no crash = success
 
 
 # ── API Endpoints ──
