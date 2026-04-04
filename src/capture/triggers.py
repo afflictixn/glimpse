@@ -14,7 +14,6 @@ from src.capture.frame_compare import FrameComparer
 from src.capture.screenshot import capture_screen, get_focused_app
 from src.config import Settings
 from src.context.context_provider import ContextProvider
-from src.intelligence.intelligence_layer import IntelligenceLayer
 from src.ocr.apple_vision import perform_ocr
 from src.process.process_agent import ProcessAgent
 from src.storage.database import DatabaseManager
@@ -38,7 +37,6 @@ async def process_frame(
     writer: SnapshotWriter,
     agents: list[ProcessAgent],
     providers: list[ContextProvider],
-    intelligence: IntelligenceLayer | None = None,
     general_agent: GeneralAgent | None = None,
 ) -> int:
     """Process a captured frame through the full pipeline.
@@ -46,7 +44,10 @@ async def process_frame(
     Used by both the local CaptureLoop and the external ingest endpoint.
     Returns the frame_id.
     """
+    t_start = time.monotonic()
+
     snapshot_path = await asyncio.to_thread(writer.save, image)
+    t_snap = time.monotonic()
 
     content_hash = hashlib.md5(
         image.resize((image.width // 8, image.height // 8), Image.Resampling.NEAREST).tobytes()
@@ -63,14 +64,26 @@ async def process_frame(
     )
     frame_id = await db.insert_frame(frame)
 
+    logger.debug(
+        "frame %d | screenshot saved in %.0fms (%s) app=%s",
+        frame_id, (t_snap - t_start) * 1000, snapshot_path, app_name or "?",
+    )
+
+    t_ocr_start = time.monotonic()
     try:
         ocr_result = await asyncio.to_thread(perform_ocr, image)
         await db.insert_ocr(frame_id, ocr_result)
         ocr_text = ocr_result.text
+        logger.debug(
+            "frame %d | OCR done in %.0fms, %d chars, confidence=%.2f",
+            frame_id, (time.monotonic() - t_ocr_start) * 1000,
+            len(ocr_text), ocr_result.confidence,
+        )
     except Exception:
         logger.error("OCR failed for frame %d", frame_id, exc_info=True)
         ocr_text = ""
 
+    t_agents_start = time.monotonic()
     agent_coros = [
         agent.process(image, ocr_text, app_name, window_name)
         for agent in agents
@@ -83,10 +96,12 @@ async def process_frame(
     all_results = await asyncio.gather(
         *agent_coros, *provider_coros, return_exceptions=True
     )
+    t_agents_done = time.monotonic()
 
     agent_results = all_results[: len(agents)]
     provider_results = all_results[len(agents) :]
 
+    any_event = False
     for i, result in enumerate(agent_results):
         if isinstance(result, BaseException):
             logger.error(
@@ -97,10 +112,18 @@ async def process_frame(
             )
             continue
         if result is not None:
+            any_event = True
             result.frame_id = frame_id
             await db.insert_event(frame_id, result)
-            if intelligence and result.id is not None:
-                await intelligence.submit(result)
+
+            text_len = len(result.metadata.get("text", ""))
+            logger.debug(
+                "frame %d | agent=%s produced event in %.0fms, summary=%s, text=%d chars",
+                frame_id, result.agent_name,
+                (t_agents_done - t_agents_start) * 1000,
+                result.summary[:80], text_len,
+            )
+
             if general_agent is not None:
                 await general_agent.push("event", {
                     "frame_id": frame_id,
@@ -111,6 +134,25 @@ async def process_frame(
                     "summary": result.summary,
                     "metadata": result.metadata,
                 })
+
+    # Non-browser frames: no agent produces an event, push raw capture to GA
+    if not any_event and general_agent is not None:
+        logger.debug(
+            "frame %d | no agent event (agents ran in %.0fms), pushing screen_capture to GA",
+            frame_id, (t_agents_done - t_agents_start) * 1000,
+        )
+        await general_agent.push("event", {
+            "frame_id": frame_id,
+            "agent_name": "screen_capture",
+            "app_type": "other",
+            "app_name": app_name or "",
+            "window_name": window_name or "",
+            "summary": f"Screen: {app_name or 'Unknown'} — {window_name or ''}",
+            "metadata": {
+                "ocr_text": ocr_text,
+                "snapshot_path": snapshot_path,
+            },
+        })
 
     for i, result in enumerate(provider_results):
         if isinstance(result, BaseException):
@@ -126,6 +168,15 @@ async def process_frame(
                 ctx.frame_id = frame_id
                 await db.insert_context(frame_id, ctx)
 
+    logger.debug(
+        "frame %d | pipeline total %.0fms (snap=%.0f ocr=%.0f agents=%.0f)",
+        frame_id,
+        (time.monotonic() - t_start) * 1000,
+        (t_snap - t_start) * 1000,
+        (t_agents_start - t_ocr_start) * 1000,
+        (t_agents_done - t_agents_start) * 1000,
+    )
+
     return frame_id
 
 
@@ -139,7 +190,6 @@ class CaptureLoop:
         activity_feed: ActivityFeed,
         process_agents: list[ProcessAgent],
         context_providers: list[ContextProvider],
-        intelligence_layer: IntelligenceLayer | None = None,
         general_agent: GeneralAgent | None = None,
     ) -> None:
         self._settings = settings
@@ -149,7 +199,6 @@ class CaptureLoop:
         self._activity = activity_feed
         self._agents = process_agents
         self._providers = context_providers
-        self._intelligence = intelligence_layer
         self._general_agent = general_agent
         self._comparer = FrameComparer()
         self._running = False
@@ -218,11 +267,14 @@ class CaptureLoop:
         return None
 
     async def _do_capture(self, trigger: CaptureTrigger) -> None:
+        t_cap_start = time.monotonic()
+
         try:
             image = await asyncio.to_thread(capture_screen)
         except Exception:
             logger.error("Screenshot capture failed", exc_info=True)
             return
+        t_screen = time.monotonic()
 
         app_name, window_name = "", ""
         try:
@@ -241,7 +293,6 @@ class CaptureLoop:
                     writer=self._writer,
                     agents=self._agents,
                     providers=self._providers,
-                    intelligence=self._intelligence,
                     general_agent=self._general_agent,
                 ),
                 timeout=self._settings.capture_timeout_s,
@@ -256,12 +307,16 @@ class CaptureLoop:
         self._capture_count += 1
         self._last_capture_time = time.monotonic()
         self._activity.mark_captured()
+        total_ms = (time.monotonic() - t_cap_start) * 1000
+        screen_ms = (t_screen - t_cap_start) * 1000
         logger.debug(
-            "Capture #%d: frame=%d trigger=%s app=%s",
+            "Capture #%d: frame=%d trigger=%s app=%s | total=%.0fms (screen_grab=%.0fms)",
             self._capture_count,
             frame_id,
             trigger.value,
             app_name,
+            total_ms,
+            screen_ms,
         )
 
     async def stop(self) -> None:

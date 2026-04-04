@@ -47,7 +47,6 @@ async def ingest_frame(
         writer=state.snapshot_writer,
         agents=state.process_agents,
         providers=state.context_providers,
-        intelligence=state.intelligence_layer,
         general_agent=state.general_agent,
     )
 

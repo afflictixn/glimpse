@@ -225,7 +225,9 @@ class TestUrlDedup:
             nonlocal call_count
             call_count += 1
             mock = AsyncMock()
-            if call_count == 1:
+            # Each process() call makes 2 osascript calls (meta + body).
+            # Calls 1-2 → page1, calls 3-4 → page2.
+            if call_count <= 2:
                 out = _js_result("https://example.com/page1", "Page 1")
             else:
                 out = _js_result("https://example.com/page2", "Page 2")
@@ -247,16 +249,34 @@ class TestUrlDedup:
 
 class TestAllowlist:
     @pytest.mark.asyncio
-    async def test_non_allowlisted_has_no_text(self, tmp_path):
+    async def test_non_allowlisted_gets_generic_body_text(self, tmp_path):
+        """Non-allowlisted pages now extract body text with 4000 char limit."""
         agent = BrowserContentAgent(allowlist_path=_make_allowlist(tmp_path))
-        js_out = _js_result("https://unknown-site.com/page", "Unknown")
-        create_fn, _ = _mock_osascript(js_out)
 
-        with patch("src.process.browser_content_agent.asyncio.create_subprocess_exec", side_effect=create_fn):
+        meta_out = _js_result("https://unknown-site.com/page", "Unknown")
+        body_out = _js_result(
+            "https://unknown-site.com/page", "Unknown",
+            text="Hello world, this is page content.",
+        )
+
+        call_count = 0
+
+        async def _create(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            mock = AsyncMock()
+            out = meta_out if call_count == 1 else body_out
+            mock.communicate = AsyncMock(return_value=(out.encode(), b""))
+            mock.returncode = 0
+            mock.kill = MagicMock()
+            return mock
+
+        with patch("src.process.browser_content_agent.asyncio.create_subprocess_exec", side_effect=_create):
             result = await agent.process(_img(), "", "Google Chrome", "Unknown")
 
         assert result is not None
-        assert "text" not in result.metadata
+        assert result.metadata["text"] == "Hello world, this is page content."
+        assert result.metadata["allowlist_label"] == ""
 
     @pytest.mark.asyncio
     async def test_bad_selector_produces_event_with_empty_text(self, tmp_path):
@@ -319,3 +339,30 @@ class TestTruncation:
 
         assert result is not None
         assert len(result.metadata["text"]) <= 8000
+
+    @pytest.mark.asyncio
+    async def test_non_allowlisted_text_truncated_to_generic_limit(self, tmp_path):
+        """Non-allowlisted pages truncate body text to 4000 chars."""
+        agent = BrowserContentAgent(allowlist_path=_make_allowlist(tmp_path))
+
+        long_text = "y" * 6000
+        meta_out = _js_result("https://unknown.com", "Unknown")
+        full_out = _js_result("https://unknown.com", "Unknown", text=long_text)
+
+        call_count = 0
+
+        async def _create(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            mock = AsyncMock()
+            out = meta_out if call_count == 1 else full_out
+            mock.communicate = AsyncMock(return_value=(out.encode(), b""))
+            mock.returncode = 0
+            mock.kill = MagicMock()
+            return mock
+
+        with patch("src.process.browser_content_agent.asyncio.create_subprocess_exec", side_effect=_create):
+            result = await agent.process(_img(), "", "Google Chrome", "Unknown")
+
+        assert result is not None
+        assert len(result.metadata["text"]) <= 4000

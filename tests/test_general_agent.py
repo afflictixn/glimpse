@@ -14,10 +14,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.general_agent.agent import GeneralAgent, PushItem
+from src.general_agent.agent import GeneralAgent, PushItem, FRAME_PROMPTS
 from src.general_agent.tools import ToolRegistry
 from src.general_agent.ws_manager import ConnectionManager
-from src.llm.types import Message, ToolCall, ToolSpec
+from src.llm.types import ContentPart, Message, ToolCall, ToolSpec, text_content
 from src.storage.database import DatabaseManager
 from src.storage.models import Event, AppType, Frame
 
@@ -745,3 +745,154 @@ class TestIntelligenceLayerTimeout:
             await task
         except asyncio.CancelledError:
             pass
+
+
+# ── 11. ContentPart / multimodal types ────────────────────────
+
+
+class TestContentPartTypes:
+    def test_text_content_from_string(self):
+        msg = Message(role="user", content="hello")
+        assert text_content(msg) == "hello"
+
+    def test_text_content_from_parts(self):
+        msg = Message(role="user", content=[
+            ContentPart(type="text", text="part 1"),
+            ContentPart(type="image", image_data=b"\xff"),
+            ContentPart(type="text", text="part 2"),
+        ])
+        assert text_content(msg) == "part 1\npart 2"
+
+    def test_text_content_from_empty_parts(self):
+        msg = Message(role="user", content=[])
+        assert text_content(msg) == ""
+
+    def test_content_part_defaults(self):
+        cp = ContentPart(type="image", image_data=b"\xff\xd8")
+        assert cp.mime_type == "image/jpeg"
+        assert cp.text == ""
+
+
+# ── 12. GA message builders ──────────────────────────────────
+
+
+@pytest.mark.asyncio
+class TestGAMessageBuilders:
+    async def test_build_browser_messages_with_allowlist_label(self, db):
+        agent = _make_agent(db)
+        item = PushItem(kind="event", data={
+            "agent_name": "browser_content",
+            "app_name": "Chrome",
+            "metadata": {
+                "text": "Product X is $50 with 4.5 stars",
+                "url": "https://amazon.com/dp/123",
+                "title": "Product X",
+                "allowlist_label": "Amazon product",
+            },
+        })
+        messages = agent._build_browser_messages(item, "Viewing [Amazon product]: Product X")
+
+        assert len(messages) == 2
+        assert messages[0].role == "system"
+        assert "red flags" in messages[0].content
+        assert messages[1].role == "user"
+        assert "Product X is $50" in messages[1].content
+        assert "amazon.com" in messages[1].content
+
+    async def test_build_browser_messages_generic(self, db):
+        agent = _make_agent(db)
+        item = PushItem(kind="event", data={
+            "agent_name": "browser_content",
+            "app_name": "Safari",
+            "metadata": {
+                "text": "Some blog post content",
+                "url": "https://blog.example.com",
+                "title": "Blog Post",
+                "allowlist_label": "",
+            },
+        })
+        messages = agent._build_browser_messages(item, "Viewing: Blog Post")
+
+        assert len(messages) == 2
+        assert "Misleading claims" in messages[0].content
+        assert "Some blog post content" in messages[1].content
+
+    async def test_build_screen_messages_with_snapshot(self, db, tmp_path):
+        from PIL import Image as PILImage
+        import numpy as np
+        img = PILImage.fromarray(np.zeros((100, 200, 3), dtype=np.uint8))
+        snap = tmp_path / "test.jpg"
+        img.save(str(snap))
+
+        agent = _make_agent(db)
+        item = PushItem(kind="event", data={
+            "agent_name": "screen_capture",
+            "app_name": "Terminal",
+            "window_name": "zsh",
+            "metadata": {
+                "ocr_text": "$ ls -la",
+                "snapshot_path": str(snap),
+            },
+        })
+        messages = await agent._build_screen_messages(item, "Screen: Terminal — zsh")
+
+        assert len(messages) == 2
+        assert messages[0].role == "system"
+        user_msg = messages[1]
+        assert isinstance(user_msg.content, list)
+        types = [p.type for p in user_msg.content]
+        assert "image" in types
+        assert "text" in types
+        text_parts = [p.text for p in user_msg.content if p.type == "text"]
+        assert any("ls -la" in t for t in text_parts)
+
+    async def test_build_screen_messages_missing_snapshot(self, db):
+        agent = _make_agent(db)
+        item = PushItem(kind="event", data={
+            "agent_name": "screen_capture",
+            "app_name": "Finder",
+            "window_name": "Desktop",
+            "metadata": {
+                "ocr_text": "file1.txt file2.txt",
+                "snapshot_path": "/nonexistent/path.jpg",
+            },
+        })
+        messages = await agent._build_screen_messages(item, "Screen: Finder — Desktop")
+
+        assert len(messages) == 2
+        user_msg = messages[1]
+        assert isinstance(user_msg.content, list)
+        types = [p.type for p in user_msg.content]
+        assert "image" not in types
+        assert "text" in types
+
+    async def test_build_generic_messages(self, db):
+        agent = _make_agent(db)
+        item = PushItem(kind="event", data={
+            "agent_name": "some_unknown",
+            "app_name": "Notes",
+            "summary": "User editing notes",
+            "metadata": {"key": "val"},
+        })
+        messages = agent._build_generic_messages(item, "User editing notes")
+
+        assert len(messages) == 2
+        assert "User editing notes" in messages[1].content
+
+
+# ── 13. Frame prompts ────────────────────────────────────────
+
+
+class TestFramePrompts:
+    def test_amazon_prompt_exists(self):
+        assert "Amazon product" in FRAME_PROMPTS
+        assert "red flags" in FRAME_PROMPTS["Amazon product"]
+
+    def test_generic_prompt_exists(self):
+        assert "" in FRAME_PROMPTS
+        assert "NOTHING" in FRAME_PROMPTS[""]
+
+    def test_unknown_label_falls_back_to_generic(self):
+        label = "SomeUnknownSite"
+        prompt = FRAME_PROMPTS.get(label, FRAME_PROMPTS[""])
+        assert "Misleading" in prompt

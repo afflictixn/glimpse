@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -16,6 +17,7 @@ from src.storage.models import AppType, Event
 logger = logging.getLogger(__name__)
 
 MAX_TEXT_LENGTH = 8000
+GENERIC_TEXT_LENGTH = 4000
 OSASCRIPT_TIMEOUT_S = 3
 
 CHROMIUM_BROWSERS = frozenset({
@@ -140,6 +142,7 @@ class BrowserContentAgent(ProcessAgent):
         if not app_name or app_name not in ALL_BROWSERS:
             return None
 
+        t_start = time.monotonic()
         is_chromium = app_name in CHROMIUM_BROWSERS
 
         match = None
@@ -153,9 +156,10 @@ class BrowserContentAgent(ProcessAgent):
         raw = await self._run_applescript(
             _chromium_js_script(app_name, js) if is_chromium else _safari_js_script(js),
         )
+        t_meta = time.monotonic()
 
         if raw is None:
-            # JS execution failed -- try the non-JS fallback for URL + title
+            logger.debug("DOM meta extraction failed for %s, trying fallback", app_name)
             return await self._fallback_extraction(app_name, is_chromium)
 
         parsed = self._parse_js_result(raw)
@@ -166,26 +170,41 @@ class BrowserContentAgent(ProcessAgent):
 
         # URL-based dedup
         if url and url == self._last_url:
+            logger.debug("DOM dedup: same URL, skipping (%s)", url[:80])
             return None
         self._last_url = url
 
-        # Check allowlist for text extraction
+        # Check allowlist for targeted extraction; fall back to generic body text
         match = self._match_allowlist(url)
-        if match:
-            selector = match.get("selector", "body")
-            full_js = _EXTRACT_WITH_SELECTOR_JS.format(
-                selector=selector.replace("'", "\\'"),
-                max_len=MAX_TEXT_LENGTH,
-            )
-            full_raw = await self._run_applescript(
-                _chromium_js_script(app_name, full_js)
-                if is_chromium
-                else _safari_js_script(full_js),
-            )
-            if full_raw is not None:
-                full_parsed = self._parse_js_result(full_raw)
-                if full_parsed is not None:
-                    parsed = full_parsed
+        selector = match.get("selector", "body") if match else "body"
+        max_len = MAX_TEXT_LENGTH if match else GENERIC_TEXT_LENGTH
+
+        full_js = _EXTRACT_WITH_SELECTOR_JS.format(
+            selector=selector.replace("'", "\\'"),
+            max_len=max_len,
+        )
+        full_raw = await self._run_applescript(
+            _chromium_js_script(app_name, full_js)
+            if is_chromium
+            else _safari_js_script(full_js),
+        )
+        t_body = time.monotonic()
+
+        if full_raw is not None:
+            full_parsed = self._parse_js_result(full_raw)
+            if full_parsed is not None:
+                parsed = full_parsed
+
+        text_len = len(parsed.get("text", ""))
+        label = match.get("label", "") if match else ""
+        logger.debug(
+            "DOM extraction: meta=%.0fms body=%.0fms total=%.0fms | "
+            "url=%s selector=%s label=%s text=%d chars",
+            (t_meta - t_start) * 1000,
+            (t_body - t_meta) * 1000,
+            (t_body - t_start) * 1000,
+            url[:60], selector, label or "(generic)", text_len,
+        )
 
         return self._build_event(parsed, app_name, match)
 
@@ -235,14 +254,17 @@ class BrowserContentAgent(ProcessAgent):
             "browser": app_name,
         }
 
+        text = parsed.get("text", "")
         if match:
             label = match.get("label", "")
-            text = parsed.get("text", "")
             if text:
                 metadata["text"] = text[:MAX_TEXT_LENGTH]
             metadata["allowlist_label"] = label
             summary = f"Viewing [{label}]: {title} ({domain})"
         else:
+            if text:
+                metadata["text"] = text[:GENERIC_TEXT_LENGTH]
+            metadata["allowlist_label"] = ""
             summary = f"Viewing: {title} ({domain})"
 
         return Event(

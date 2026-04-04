@@ -9,19 +9,23 @@ The agent runs as a continuous asyncio.Task:
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import logging
 import time
 from collections import deque
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
+
+from PIL import Image
 
 from src.general_agent.event_filter import EventFilter
 from src.general_agent.ollama_client import sanitize_response
 from src.general_agent.tools import ToolRegistry
 from src.general_agent.ws_manager import ConnectionManager
 from src.llm.client import LLMClient
-from src.llm.types import Message
+from src.llm.types import ContentPart, Message, text_content
 from src.storage.database import DatabaseManager
 from src.voice.tts import VoiceClient
 
@@ -32,6 +36,28 @@ MAX_CONTEXT_ITEMS = 50
 MAX_CONVERSATION_TURNS = 30
 
 MAX_TOOL_ROUNDS = 10
+
+MAX_SCREENSHOT_WIDTH = 1280
+SCREENSHOT_JPEG_QUALITY = 70
+
+FRAME_PROMPTS: dict[str, str] = {
+    "Amazon product": (
+        "The user is viewing a product page. Analyze for red flags:\n"
+        "- Low review count or suspicious review patterns\n"
+        "- Specific bad reviews mentioning defects even if overall rating is good\n"
+        "- Inconsistencies in the product description\n"
+        "- Pricing concerns (unusually high/low)\n"
+        "If you find something worth mentioning, say it in one sentence.\n"
+        "If the page looks fine, respond: NOTHING"
+    ),
+    "": (
+        "The user is browsing a web page. Only speak up if you notice:\n"
+        "- Misleading claims or inconsistencies\n"
+        "- Scam/phishing indicators\n"
+        "- Something genuinely useful or noteworthy\n"
+        "If nothing stands out, respond: NOTHING"
+    ),
+}
 
 
 SYSTEM_PROMPT = """\
@@ -218,22 +244,45 @@ class GeneralAgent:
 
     async def _process_item(self, item: PushItem) -> None:
         """Evaluate a pushed event/action and decide whether to surface it."""
+        t_start = time.monotonic()
+        agent_name = item.data.get("agent_name", "unknown")
+        frame_id = item.data.get("frame_id", "?")
+        queue_wait = time.time() - item.received_at
+
         summary = self._extract_summary(item)
         if not summary:
             return
 
         should_process, importance = self._filter.should_process(item, summary)
         if not should_process:
+            logger.debug(
+                "GA frame %s | FILTERED (agent=%s, importance=%.2f, waited %.1fs in queue)",
+                frame_id, agent_name, importance, queue_wait,
+            )
             return
+
+        logger.debug(
+            "GA frame %s | START processing agent=%s importance=%.2f queue_wait=%.1fs",
+            frame_id, agent_name, importance, queue_wait,
+        )
 
         notification = await self._analyze_screen_context(item, summary)
 
+        t_llm_done = time.monotonic()
+        llm_ms = (t_llm_done - t_start) * 1000
+
         if not notification:
-            logger.debug("LLM found nothing noteworthy for %s event", item.data.get("agent_name", "unknown"))
+            logger.debug(
+                "GA frame %s | LLM returned NOTHING in %.0fms (agent=%s)",
+                frame_id, llm_ms, agent_name,
+            )
             return
 
         if self._filter.is_duplicate_notification(notification):
-            logger.debug("Filter: duplicate notification — %s", notification[:80])
+            logger.debug(
+                "GA frame %s | duplicate notification suppressed in %.0fms — %s",
+                frame_id, llm_ms, notification[:80],
+            )
             return
 
         await self._ws_send({
@@ -246,56 +295,59 @@ class GeneralAgent:
             asyncio.create_task(self._voice.speak(notification))
 
         self._filter.record_notification(notification)
-        logger.info("Surfaced to overlay: %s", notification[:100])
+        total_ms = (time.monotonic() - t_start) * 1000
+        logger.info(
+            "GA frame %s | SURFACED in %.0fms (llm=%.0fms) agent=%s → %s",
+            frame_id, total_ms, llm_ms, agent_name, notification[:100],
+        )
 
     async def _analyze_screen_context(self, item: PushItem, summary: str) -> str:
         """Let the LLM decide if the screen context is worth a proactive notification."""
-        from datetime import date
-        today = date.today().isoformat()
+        agent_name = item.data.get("agent_name", "")
+        frame_id = item.data.get("frame_id", "?")
 
-        enrichment = await self._enrich(item)
+        t_build = time.monotonic()
+        if agent_name == "browser_content":
+            path_label = "browser"
+            messages = self._build_browser_messages(item, summary)
+        elif agent_name == "screen_capture":
+            path_label = "screen (multimodal)"
+            messages = await self._build_screen_messages(item, summary)
+        else:
+            path_label = "generic"
+            messages = self._build_generic_messages(item, summary)
+        build_ms = (time.monotonic() - t_build) * 1000
 
-        metadata = item.data.get("metadata", {})
-        app_name = item.data.get("app_name", "")
-        app_type = item.data.get("app_type", "")
-
-        context_parts = [f"Screen activity: {summary}"]
-        if app_name:
-            context_parts.append(f"App: {app_name}")
-        if app_type:
-            context_parts.append(f"Type: {app_type}")
-        if metadata:
-            context_parts.append(f"Details: {json.dumps(metadata, default=str)[:500]}")
-        if enrichment:
-            context_parts.append(f"Related history: {enrichment}")
-
-        context_block = "\n".join(context_parts)
-
-        system = (
-            f"You are Z, the user's ambient assistant. Today is {today}. "
-            "Everything you say is spoken aloud, so talk like a friend — "
-            "short, casual, no filler.\n\n"
-            "You just got a screen update. Chime in ONLY if you'd actually "
-            "tap a friend on the shoulder for it. Never narrate what's on screen.\n\n"
-            "Max one sentence. "
-            "Don't repeat yourself. If you've already mentioned something, don't mention it again."
-            "If nothing worth saying, respond: NOTHING\n\n"
-            "Good: \"Heads up, that book's only 20 pages with bad reviews — "
-            "the original paper's free on arXiv.\"\n"
-            "Good: \"That header needs more contrast — try #E2E2E2.\"\n"
-            "Bad: \"You are viewing a product page on Amazon.\""
+        has_image = any(
+            isinstance(m.content, list) and any(p.type == "image" for p in m.content)
+            for m in messages
+        )
+        total_text = sum(
+            len(p.text) for m in messages
+            for p in (m.content if isinstance(m.content, list) else [])
+            if hasattr(p, "text")
+        ) + sum(
+            len(m.content) for m in messages if isinstance(m.content, str)
         )
 
-        messages = [
-            Message(role="system", content=system),
-            Message(role="user", content=context_block),
-        ]
+        logger.debug(
+            "GA frame %s | LLM call: path=%s build=%.0fms image=%s text_chars=%d msgs=%d",
+            frame_id, path_label, build_ms, has_image, total_text, len(messages),
+        )
+
+        t_llm = time.monotonic()
         try:
             response = await asyncio.wait_for(
                 self._llm.complete(messages),
                 timeout=self._LLM_CALL_TIMEOUT,
             )
-            result = response.content.strip()
+            result = text_content(response).strip()
+            llm_ms = (time.monotonic() - t_llm) * 1000
+            logger.debug(
+                "GA frame %s | LLM responded in %.0fms, %d chars, nothing=%s",
+                frame_id, llm_ms, len(result),
+                "NOTHING" in result.upper() or not result,
+            )
             if "NOTHING" in result.upper() or not result:
                 return ""
             return result
@@ -305,6 +357,129 @@ class GeneralAgent:
         except Exception:
             logger.error("Screen context LLM analysis failed", exc_info=True)
             return ""
+
+    def _base_system_prompt(self, frame_type_instruction: str = "") -> str:
+        from datetime import date
+        today = date.today().isoformat()
+
+        system = (
+            f"You are Z, the user's ambient assistant. Today is {today}. "
+            "Everything you say is spoken aloud, so talk like a friend — "
+            "short, casual, no filler.\n\n"
+            "You just got a screen update. Chime in ONLY if you'd actually "
+            "tap a friend on the shoulder for it. Never narrate what's on screen.\n\n"
+            "Max one sentence. "
+            "Don't repeat yourself. If you've already mentioned something, don't mention it again. "
+            "If nothing worth saying, respond: NOTHING\n\n"
+            "Good: \"Heads up, that book's only 20 pages with bad reviews — "
+            "the original paper's free on arXiv.\"\n"
+            "Good: \"That header needs more contrast — try #E2E2E2.\"\n"
+            "Bad: \"You are viewing a product page on Amazon.\""
+        )
+        if frame_type_instruction:
+            system += f"\n\n{frame_type_instruction}"
+        return system
+
+    def _build_browser_messages(self, item: PushItem, summary: str) -> list[Message]:
+        metadata = item.data.get("metadata", {})
+        url = metadata.get("url", "")
+        title = metadata.get("title", "")
+        page_text = metadata.get("text", "")
+        label = metadata.get("allowlist_label", "")
+        app_name = item.data.get("app_name", "")
+
+        instruction = FRAME_PROMPTS.get(label, FRAME_PROMPTS[""])
+        system = self._base_system_prompt(instruction)
+
+        user_parts = [f"App: {app_name}"]
+        if title:
+            user_parts.append(f"Page: {title} ({url})")
+        if label:
+            user_parts.append(f"Page type: {label}")
+        if page_text:
+            user_parts.append(f"\nPage content:\n{page_text[:6000]}")
+
+        return [
+            Message(role="system", content=system),
+            Message(role="user", content="\n".join(user_parts)),
+        ]
+
+    async def _build_screen_messages(self, item: PushItem, summary: str) -> list[Message]:
+        metadata = item.data.get("metadata", {})
+        ocr_text = metadata.get("ocr_text", "")
+        snapshot_path = metadata.get("snapshot_path", "")
+        app_name = item.data.get("app_name", "")
+        window_name = item.data.get("window_name", "")
+        frame_id = item.data.get("frame_id", "?")
+
+        system = self._base_system_prompt()
+
+        content_parts: list[ContentPart] = []
+
+        if snapshot_path and Path(snapshot_path).is_file():
+            try:
+                t_enc = time.monotonic()
+                image_data = await asyncio.to_thread(
+                    self._encode_screenshot, snapshot_path
+                )
+                enc_ms = (time.monotonic() - t_enc) * 1000
+                content_parts.append(ContentPart(
+                    type="image",
+                    image_data=image_data,
+                    mime_type="image/jpeg",
+                ))
+                logger.debug(
+                    "GA frame %s | screenshot encoded in %.0fms, %d KB",
+                    frame_id, enc_ms, len(image_data) // 1024,
+                )
+            except Exception:
+                logger.debug("Failed to load screenshot %s", snapshot_path, exc_info=True)
+        else:
+            logger.debug("GA frame %s | no screenshot file at %s", frame_id, snapshot_path)
+
+        text_block = f"App: {app_name}"
+        if window_name:
+            text_block += f"\nWindow: {window_name}"
+        if ocr_text:
+            text_block += f"\n\nVisible text (OCR):\n{ocr_text[:2000]}"
+
+        content_parts.append(ContentPart(type="text", text=text_block))
+
+        return [
+            Message(role="system", content=system),
+            Message(role="user", content=content_parts),
+        ]
+
+    def _build_generic_messages(self, item: PushItem, summary: str) -> list[Message]:
+        """Fallback for any event type not specifically handled."""
+        metadata = item.data.get("metadata", {})
+        app_name = item.data.get("app_name", "")
+
+        system = self._base_system_prompt()
+
+        context_parts = [f"Screen activity: {summary}"]
+        if app_name:
+            context_parts.append(f"App: {app_name}")
+        if metadata:
+            context_parts.append(f"Details: {json.dumps(metadata, default=str)[:500]}")
+
+        return [
+            Message(role="system", content=system),
+            Message(role="user", content="\n".join(context_parts)),
+        ]
+
+    @staticmethod
+    def _encode_screenshot(path: str) -> bytes:
+        img = Image.open(path).convert("RGB")
+        if img.width > MAX_SCREENSHOT_WIDTH:
+            ratio = MAX_SCREENSHOT_WIDTH / img.width
+            img = img.resize(
+                (MAX_SCREENSHOT_WIDTH, int(img.height * ratio)),
+                Image.Resampling.LANCZOS,
+            )
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=SCREENSHOT_JPEG_QUALITY)
+        return buf.getvalue()
 
     def _extract_summary(self, item: PushItem) -> str:
         data = item.data
@@ -379,11 +554,12 @@ class GeneralAgent:
                 logger.error("LLM completion failed", exc_info=True)
                 return last_text or "Sorry, I couldn't generate a response right now."
 
-            if response.content:
-                last_text = response.content
+            resp_text = text_content(response)
+            if resp_text:
+                last_text = resp_text
 
             if not response.tool_calls:
-                return response.content or last_text or ""
+                return resp_text or last_text or ""
 
             logger.info("Tool round %d: calling %s", round_num + 1,
                         ", ".join(tc.name for tc in response.tool_calls))

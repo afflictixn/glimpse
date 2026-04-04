@@ -122,6 +122,17 @@ class FailingAgent(ProcessAgent):
         raise RuntimeError(f"Agent {self._name} intentional failure")
 
 
+class NoneAgent(ProcessAgent):
+    """Always returns None — simulates non-browser frames where BrowserContentAgent skips."""
+
+    @property
+    def name(self) -> str:
+        return "none_agent"
+
+    async def process(self, image, ocr_text, app_name, window_name) -> Event | None:
+        return None
+
+
 def _make_capture_loop(
     settings: Settings,
     db: DatabaseManager,
@@ -281,6 +292,62 @@ class TestProcessFrame:
         elapsed = time.monotonic() - t0
 
         assert elapsed < 2.0, f"Timeout took {elapsed:.1f}s — should be ~0.5s"
+
+    async def test_raw_frame_push_when_no_agent_event(self, db, tmp_settings):
+        """When no agent returns an event, a screen_capture push is sent to GA."""
+        from unittest.mock import AsyncMock as AM
+        agent = NoneAgent()
+        writer = SnapshotWriter(tmp_settings)
+        mock_ga = AM()
+        mock_ga.push = AM()
+
+        with patch("src.capture.triggers.perform_ocr", side_effect=_mock_ocr):
+            frame_id = await process_frame(
+                image=_make_image(),
+                app_name="Terminal",
+                window_name="zsh",
+                trigger="click",
+                db=db,
+                writer=writer,
+                agents=[agent],
+                providers=[],
+                general_agent=mock_ga,
+            )
+
+        mock_ga.push.assert_awaited_once()
+        call_args = mock_ga.push.call_args
+        assert call_args[0][0] == "event"
+        data = call_args[0][1]
+        assert data["agent_name"] == "screen_capture"
+        assert data["app_name"] == "Terminal"
+        assert data["metadata"]["ocr_text"] == "mocked ocr text"
+        assert "snapshot_path" in data["metadata"]
+
+    async def test_no_raw_push_when_agent_returns_event(self, db, tmp_settings):
+        """When an agent returns an event, no screen_capture push is sent."""
+        from unittest.mock import AsyncMock as AM
+        agent = FastAgent()
+        writer = SnapshotWriter(tmp_settings)
+        mock_ga = AM()
+        mock_ga.push = AM()
+
+        with patch("src.capture.triggers.perform_ocr", side_effect=_mock_ocr):
+            await process_frame(
+                image=_make_image(),
+                app_name="Safari",
+                window_name="Google",
+                trigger="click",
+                db=db,
+                writer=writer,
+                agents=[agent],
+                providers=[],
+                general_agent=mock_ga,
+            )
+
+        # GA should have received a push, but for the agent's event, not screen_capture
+        mock_ga.push.assert_awaited_once()
+        data = mock_ga.push.call_args[0][1]
+        assert data["agent_name"] == "fast"
 
 
 # ── CaptureLoop tests ────────────────────────────────────────

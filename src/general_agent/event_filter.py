@@ -22,6 +22,8 @@ NOTIFICATION_WINDOW_S = 120.0
 IMPORTANCE_THRESHOLD = 0.5
 
 _CONTEXT_COOLDOWNS: dict[str, float] = {
+    "browser_content": 45.0,
+    "screen_capture": 60.0,
     "gemma3": 60.0,
     "gemini_vision": 60.0,
     "openai_vision": 60.0,
@@ -145,7 +147,7 @@ class EventFilter:
         if data.get("action_type", "").lower() in _HIGH_SIGNAL_ACTION_TYPES:
             score += 0.3
 
-        if agent.startswith("gemma") or agent in ("gemini_vision", "openai_vision"):
+        if agent in ("browser_content", "screen_capture", "gemini_vision", "openai_vision") or agent.startswith("gemma"):
             score += 0.1
 
         summary = data.get("summary", "") or data.get("action_description", "")
