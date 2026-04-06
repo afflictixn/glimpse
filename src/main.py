@@ -4,28 +4,21 @@ import argparse
 import asyncio
 import logging
 import signal
-import sys
 from pathlib import Path
 
 import uvicorn
 
 from src.api.server import create_app
 from src.capture.activity_feed import ActivityFeed
+from src.capture.browser_content import BrowserContentAgent
 from src.capture.event_tap import CaptureTrigger, EventTap
 from src.capture.triggers import CaptureLoop
 from src.config import Settings, set_settings
+from src.context.context_provider import ContextProvider
 from src.general_agent.agent import GeneralAgent
 from src.general_agent.tools import ToolRegistry
 from src.general_agent.ws_manager import ConnectionManager
 from src.llm import create_llm_client
-from src.intelligence.intelligence_layer import IntelligenceLayer
-from src.intelligence.presentation_critique_agent import PresentationCritiqueAgent
-from src.process.gemini_vision_agent import GeminiVisionAgent
-from src.process.gemma_agent import GemmaAgent
-from src.process.openai_vision_agent import OpenAIVisionAgent
-from src.process.process_agent import ProcessAgent
-from src.context.context_provider import ContextProvider
-from src.intelligence.reasoning_agent import ReasoningAgent
 from src.storage.database import DatabaseManager
 from src.storage.snapshot_writer import SnapshotWriter
 from src.voice.tts import VoiceClient
@@ -44,15 +37,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-db-size-mb", type=int, default=_DEFAULTS.max_db_size_mb, help="Max database size in MB")
     parser.add_argument("--log-level", type=str, default="INFO", help="Logging level")
     parser.add_argument("--debug", action="store_true", help="Enable debug logging for Z Exp internals (suppresses third-party noise)")
-    parser.add_argument("--provider", type=str, default=None, help="Set BOTH vision and LLM provider at once: gemini, openai, or ollama")
-    parser.add_argument("--vision-provider", type=str, default=_DEFAULTS.vision_provider, help="Vision agent provider: gemini, openai, or ollama")
-    parser.add_argument("--gemini-vision-model", type=str, default=_DEFAULTS.gemini_vision_model, help="Gemini model for vision processing")
-    parser.add_argument("--openai-vision-model", type=str, default=_DEFAULTS.openai_vision_model, help="OpenAI model for vision processing")
-    parser.add_argument("--openai-image-detail", type=str, default=_DEFAULTS.openai_image_detail, help="OpenAI image detail level: low or auto")
-    parser.add_argument("--ollama-model", type=str, default=_DEFAULTS.ollama_model, help="Ollama model name")
-    parser.add_argument("--ollama-url", type=str, default=_DEFAULTS.ollama_base_url, help="Ollama server base URL")
-    parser.add_argument("--include-ocr", action="store_true", help="Include OCR text in Gemma agent prompt")
-    parser.add_argument("--max-image-width", type=int, default=_DEFAULTS.ollama_max_image_width, help="Max image width sent to Ollama vision model")
+    parser.add_argument("--debug-ws", action="store_true", help="Also stream debug logs to overlay sidebar (requires --debug)")
     parser.add_argument("--llm-provider", type=str, default=_DEFAULTS.llm_provider, help="LLM provider: openai, gemini, or ollama")
     parser.add_argument("--llm-model", type=str, default=_DEFAULTS.llm_model, help="LLM model name")
     parser.add_argument("--llm-reasoning-effort", type=str, default=_DEFAULTS.llm_reasoning_effort, help="Reasoning effort: low, medium, high, or none to disable")
@@ -82,32 +67,7 @@ async def run(settings: Settings) -> None:
 
     tool_registry = ToolRegistry(db)
 
-    if settings.vision_provider == "gemini":
-        vision_agent: ProcessAgent = GeminiVisionAgent(
-            model=settings.gemini_vision_model,
-            include_ocr=settings.include_ocr,
-            max_image_width=settings.ollama_max_image_width,
-        )
-    elif settings.vision_provider == "openai":
-        vision_agent = OpenAIVisionAgent(
-            model=settings.openai_vision_model,
-            include_ocr=settings.include_ocr,
-            max_image_width=settings.ollama_max_image_width,
-            image_detail=settings.openai_image_detail,
-            timeout_s=settings.openai_vision_timeout_s,
-        )
-    else:
-        vision_agent = GemmaAgent(
-            ollama_base_url=settings.ollama_base_url,
-            model=settings.ollama_model,
-            include_ocr=settings.include_ocr,
-            timeout_s=settings.ollama_timeout_s,
-            max_image_width=settings.ollama_max_image_width,
-        )
-
-    process_agents: list[ProcessAgent] = [
-        vision_agent,
-    ]
+    browser_agent = BrowserContentAgent()
     context_providers: list[ContextProvider] = []
 
     # Voice (ElevenLabs TTS)
@@ -128,19 +88,13 @@ async def run(settings: Settings) -> None:
 
     ws_manager = ConnectionManager()
 
-    reasoning_agents: list[ReasoningAgent] = [
-        PresentationCritiqueAgent(llm=llm_client),
-    ]
     general_agent = GeneralAgent(
         db=db,
         tools=tool_registry,
         llm=llm_client,
         ws_manager=ws_manager,
         voice=voice,
-        importance_filter_enabled=settings.importance_filter_enabled,
     )
-
-    intelligence = IntelligenceLayer(agents=reasoning_agents, db=db, general_agent=general_agent)
 
     trigger_queue: asyncio.Queue[CaptureTrigger] = asyncio.Queue()
     loop = asyncio.get_running_loop()
@@ -164,19 +118,17 @@ async def run(settings: Settings) -> None:
         snapshot_writer=snapshot_writer,
         trigger_queue=trigger_queue,
         activity_feed=activity_feed,
-        process_agents=process_agents,
         context_providers=context_providers,
-        intelligence_layer=intelligence,
         general_agent=general_agent,
+        browser_agent=browser_agent,
     )
 
     app = create_app(
         db,
         general_agent=general_agent,
         snapshot_writer=snapshot_writer,
-        process_agents=process_agents,
         context_providers=context_providers,
-        intelligence_layer=intelligence,
+        browser_agent=browser_agent,
         ws_manager=ws_manager,
     )
 
@@ -198,8 +150,7 @@ async def run(settings: Settings) -> None:
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, handle_signal)
 
-    # Attach WS debug log handler when running with --debug
-    if settings.debug:
+    if settings.debug_ws:
         from src.debug.ws_log_handler import WsLogHandler
         ws_handler = WsLogHandler(ws_manager, asyncio.get_running_loop())
         for name in ("src", "zexp"):
@@ -209,7 +160,6 @@ async def run(settings: Settings) -> None:
     server_task = asyncio.create_task(server.serve())
     event_tap.start()
     capture_task = asyncio.create_task(capture_loop.run())
-    intelligence_task = asyncio.create_task(intelligence.run())
     general_agent_task = asyncio.create_task(general_agent.run())
     cleanup = asyncio.create_task(
         cleanup_task(db, settings.cleanup_interval_hours)
@@ -221,15 +171,13 @@ async def run(settings: Settings) -> None:
 
     logger.info("Shutting down...")
     await capture_loop.stop()
-    await intelligence.stop()
     await general_agent.stop()
     server.should_exit = True
     capture_task.cancel()
-    intelligence_task.cancel()
     general_agent_task.cancel()
     cleanup.cancel()
 
-    for t in (capture_task, intelligence_task, general_agent_task, cleanup, server_task):
+    for t in (capture_task, general_agent_task, cleanup, server_task):
         try:
             await t
         except asyncio.CancelledError:
@@ -262,35 +210,17 @@ def main() -> None:
     args = parse_args()
     _configure_logging(args)
 
-    # --provider sets both vision and LLM provider at once
-    vision_provider = args.provider or args.vision_provider
-    llm_provider = args.provider or args.llm_provider
-
-    # Auto-pick model when using --provider shortcut
-    llm_model = args.llm_model
-    if args.provider == "ollama" and llm_model == _DEFAULTS.llm_model and _DEFAULTS.llm_provider != "ollama":
-        llm_model = args.ollama_model
-    elif args.provider == "gemini" and llm_model == _DEFAULTS.llm_model and _DEFAULTS.llm_provider != "gemini":
-        llm_model = args.gemini_vision_model
-
     settings = Settings(
         port=args.port,
         data_dir=Path(args.data_dir),
         jpeg_quality=args.jpeg_quality,
         max_retention_days=args.retention_days,
         max_db_size_mb=args.max_db_size_mb,
-        vision_provider=vision_provider,
-        gemini_vision_model=args.gemini_vision_model,
-        openai_vision_model=args.openai_vision_model,
-        openai_image_detail=args.openai_image_detail,
-        ollama_base_url=args.ollama_url,
-        ollama_model=args.ollama_model,
-        include_ocr=args.include_ocr,
-        ollama_max_image_width=args.max_image_width,
-        llm_provider=llm_provider,
-        llm_model=llm_model,
+        llm_provider=args.llm_provider,
+        llm_model=args.llm_model,
         llm_reasoning_effort=args.llm_reasoning_effort if args.llm_reasoning_effort != "none" else None,
-        debug=args.debug,
+        debug=args.debug or args.debug_ws,
+        debug_ws=args.debug_ws,
     )
 
     asyncio.run(run(settings))

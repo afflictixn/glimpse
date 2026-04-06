@@ -23,11 +23,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.general_agent.agent import GeneralAgent
 from src.general_agent.tools import ToolRegistry
 from src.general_agent.ws_manager import ConnectionManager
-from src.intelligence.intelligence_layer import IntelligenceLayer
-from src.intelligence.reasoning_agent import ReasoningAgent
 from src.llm.types import Message, ToolSpec
 from src.storage.database import DatabaseManager
-from src.storage.models import Action, AppType, Event, Frame, OCRResult
+from src.storage.models import AppType, Event, Frame, OCRResult
 
 
 # ── Stubs ─────────────────────────────────────────────────────
@@ -507,122 +505,7 @@ class TestFlakeyLLM:
         await _stop_agent(agent, task)
 
 
-# ── 5. IntelligenceLayer concurrent stress ───────────────────
-
-
-class SlowReasoningAgent(ReasoningAgent):
-    def __init__(self, delay: float, name_: str = "slow_reasoner"):
-        self._delay = delay
-        self._name = name_
-        self.call_count = 0
-
-    @property
-    def name(self) -> str:
-        return self._name
-
-    async def reason(self, event, db) -> Action | None:
-        self.call_count += 1
-        await asyncio.sleep(self._delay)
-        return Action(
-            event_id=event.id,
-            frame_id=event.frame_id,
-            agent_name=self._name,
-            action_type="test",
-            action_description=f"slow result from {self._name}",
-        )
-
-
-class CrashingReasoningAgent(ReasoningAgent):
-    def __init__(self, name_: str = "crasher"):
-        self._name = name_
-        self.call_count = 0
-
-    @property
-    def name(self) -> str:
-        return self._name
-
-    async def reason(self, event, db) -> Action | None:
-        self.call_count += 1
-        if self.call_count % 3 == 0:
-            raise RuntimeError("random crash")
-        raise TimeoutError("LLM timed out")
-
-
-@pytest.mark.asyncio
-class TestIntelligenceLayerStress:
-    async def test_burst_events_with_slow_agents(self, db):
-        """Submit 10 events rapidly with a 0.3s agent. Layer should process
-        all of them without dropping any."""
-        slow = SlowReasoningAgent(delay=0.3)
-        layer = IntelligenceLayer(agents=[slow], db=db)
-        task = asyncio.create_task(layer.run())
-
-        fid = await db.insert_frame(Frame(
-            timestamp="2025-01-01T00:00:00Z", capture_trigger="manual",
-        ))
-
-        for i in range(10):
-            evt = Event(
-                agent_name="test", app_type=AppType.BROWSER,
-                summary=f"stress event {i}", frame_id=fid,
-            )
-            evt.id = i + 1
-            await layer.submit(evt)
-
-        # 10 events × 0.3s = 3s + margin
-        deadline = time.monotonic() + 10.0
-        while not layer._event_queue.empty():
-            assert time.monotonic() < deadline, "Intelligence layer stalled"
-            await asyncio.sleep(0.1)
-        await asyncio.sleep(0.5)
-
-        assert slow.call_count == 10
-
-        await layer.stop()
-        task.cancel()
-        try:
-            await task
-        except (asyncio.CancelledError, Exception):
-            pass
-
-    async def test_mixed_success_and_failure(self, db):
-        """One agent succeeds, another alternates between timeout and crash.
-        Successful agent's actions should all be saved."""
-        good = SlowReasoningAgent(delay=0.05, name_="good")
-        bad = CrashingReasoningAgent(name_="bad")
-        layer = IntelligenceLayer(agents=[good, bad], db=db)
-        task = asyncio.create_task(layer.run())
-
-        fid = await db.insert_frame(Frame(
-            timestamp="2025-01-01T00:00:00Z", capture_trigger="manual",
-        ))
-
-        for i in range(5):
-            evt = Event(
-                agent_name="test", app_type=AppType.OTHER,
-                summary=f"mixed event {i}", frame_id=fid,
-            )
-            evt.id = i + 1
-            await db.insert_event(fid, evt)
-            await layer.submit(evt)
-
-        await asyncio.sleep(2.0)
-
-        assert good.call_count == 5
-        assert bad.call_count == 5
-
-        actions = await db.search_actions(query="slow result", limit=20)
-        assert len(actions) == 5
-
-        await layer.stop()
-        task.cancel()
-        try:
-            await task
-        except (asyncio.CancelledError, Exception):
-            pass
-
-
-# ── 6. Agent + WS manager integration ────────────────────────
+# ── 5. Agent + WS manager integration ────────────────────────
 
 
 @pytest.mark.asyncio
@@ -749,7 +632,7 @@ class TestAgentWSIntegration:
         await _stop_agent(agent, task)
 
 
-# ── 7. Agent process item timeout ─────────────────────────────
+# ── 6. Agent process item timeout ─────────────────────────────
 
 
 @pytest.mark.asyncio

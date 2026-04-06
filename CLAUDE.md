@@ -61,20 +61,12 @@ Z Exp is a macOS-native screen activity capture and intelligence service. The as
 └─────────────────────────────────────────────────────────────┘
                               │
                               ▼
-┌──────────────────── INTELLIGENCE ───────────────────────────┐
-│  IntelligenceLayer (async queue consumer)                    │
-│  └─ Event → ReasoningAgent.reason(event, db) → Action       │
-│     └─ insert_action + actions_fts                          │
-└─────────────────────────────────────────────────────────────┘
-                    │                          │
-                    ▼                          ▼
 ┌─────────────── STORAGE ──────────┐ ┌──────────── GENERAL AGENT ────────┐
 │  SQLite (WAL) + FTS5             │ │  In-process, long-running loop     │
-│  frames, ocr_text, events,       │ │  Receives events + actions via     │
-│  context, actions + FTS indexes  │ │  direct method calls from capture  │
-│  JPEG files ~/.zexp/data/        │ │  loop and intelligence layer       │
-│  Periodic retention cleanup      │ │  Uses tools (DB, web search stubs) │
-│                                  │ │  Broadcasts proposals via /ws      │
+│  frames, ocr_text, events,       │ │  Receives events via direct        │
+│  context, actions + FTS indexes  │ │  method calls from capture loop    │
+│  JPEG files ~/.zexp/data/        │ │  Uses tools (DB, web search stubs) │
+│  Periodic retention cleanup      │ │  Broadcasts proposals via /ws      │
 │                                  │ │  Maintains conversation context    │
 └──────────────────────────────────┘ └──────────────────────────────────┘
                     │
@@ -99,12 +91,11 @@ Z Exp is a macOS-native screen activity capture and intelligence service. The as
 | Interface | File | Implementors |
 |-----------|------|-------------|
 | `ProcessAgent` (ABC) | `src/process/process_agent.py` | `GemmaAgent`, `NoOpAgent` |
-| `ReasoningAgent` (ABC) | `src/intelligence/reasoning_agent.py` | (none wired yet) |
 | `ContextProvider` (ABC) | `src/context/context_provider.py` | (none wired yet) |
 | `GeneralAgent` | `src/general_agent/agent.py` | Implemented — queue consumer, tool dispatch, overlay push |
 | `ToolRegistry` | `src/general_agent/tools.py` | `db_query`, `db_raw_sql`, `web_search` (stub), `price_lookup` (stub), `contact_lookup` |
 
-ProcessAgent, ReasoningAgent, and ContextProvider follow a plug-in pattern — add new implementations and register them in `main.py`. The GeneralAgent is a singleton wired in `main.py` that receives pushes from the capture loop and intelligence layer.
+ProcessAgent and ContextProvider follow a plug-in pattern — add new implementations and register them in `main.py`. The GeneralAgent is a singleton wired in `main.py` that receives pushes from the capture loop.
 
 ## Database schema
 
@@ -130,7 +121,7 @@ pytest tests/ -v
 
 | File | What it covers |
 |------|---------------|
-| `tests/test_health.py` | Domain models, DB insert/search/FTS for OCR, events, context, and actions, row counts, raw SQL guard (rejects non-SELECT), `FrameComparer`, `ActivityFeed`, `NoOpAgent`, `IntelligenceLayer` with stub and failing reasoning agents, full ASGI API integration tests for all routes |
+| `tests/test_health.py` | Domain models, DB insert/search/FTS for OCR, events, context, and actions, row counts, raw SQL guard (rejects non-SELECT), `FrameComparer`, `ActivityFeed`, full ASGI API integration tests for all routes |
 | `tests/test_gemma_agent.py` | `GemmaAgent` prompt building, JSON response parsing, image encoding, fallback on malformed JSON, async handling when Ollama is unreachable; live Ollama integration tests (auto-skipped when Ollama is not running) |
 
 ### Quick commands

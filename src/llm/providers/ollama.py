@@ -8,8 +8,10 @@ import urllib.request
 import uuid
 from typing import Any
 
+import base64
+
 from src.general_agent.ollama_client import parse_tool_calls, build_tools_prompt, tool_spec_to_ollama
-from src.llm.types import Message, ToolCall, ToolSpec
+from src.llm.types import ContentPart, Message, ToolCall, ToolSpec, text_content
 
 logger = logging.getLogger(__name__)
 
@@ -66,9 +68,15 @@ class OllamaClient:
         result: list[dict] = []
 
         for msg in messages:
+            txt = text_content(msg)
+            images: list[str] = []
+            if isinstance(msg.content, list):
+                for cp in msg.content:
+                    if cp.type == "image" and cp.image_data:
+                        images.append(base64.b64encode(cp.image_data).decode())
+
             if msg.role == "system":
-                content = msg.content
-                # Inject tool descriptions into system prompt
+                content = txt
                 if tools and result == []:  # first system message
                     ollama_tools = [
                         tool_spec_to_ollama(t.name, t.description, t.parameters)
@@ -79,12 +87,15 @@ class OllamaClient:
             elif msg.role == "tool":
                 result.append({
                     "role": "user",
-                    "content": f"Tool result from {msg.tool_name}:\n{msg.content}",
+                    "content": f"Tool result from {msg.tool_name}:\n{txt}",
                 })
             elif msg.role == "assistant":
-                result.append({"role": "assistant", "content": msg.content})
+                result.append({"role": "assistant", "content": txt})
             else:
-                result.append({"role": "user", "content": msg.content})
+                entry: dict[str, Any] = {"role": "user", "content": txt}
+                if images:
+                    entry["images"] = images
+                result.append(entry)
 
         # If tools but no system message was present, prepend one
         if tools and not any(m.get("role") == "system" for m in result):

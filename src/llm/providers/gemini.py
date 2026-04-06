@@ -9,7 +9,7 @@ from typing import Any
 from google import genai
 from google.genai import types as gtypes
 
-from src.llm.types import Message, ToolCall, ToolSpec
+from src.llm.types import ContentPart, Message, ToolCall, ToolSpec, text_content
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +73,7 @@ class GeminiClient:
 
         for msg in messages:
             if msg.role == "system":
-                system_parts.append(msg.content)
+                system_parts.append(text_content(msg))
                 continue
 
             # For assistant messages with tool calls, replay the raw Gemini
@@ -87,7 +87,18 @@ class GeminiClient:
 
             parts: list[gtypes.Part] = []
 
-            if msg.content:
+            if isinstance(msg.content, list):
+                for cp in msg.content:
+                    if cp.type == "text" and cp.text:
+                        parts.append(gtypes.Part(text=cp.text))
+                    elif cp.type == "image" and cp.image_data:
+                        parts.append(gtypes.Part(
+                            inline_data=gtypes.Blob(
+                                mime_type=cp.mime_type,
+                                data=cp.image_data,
+                            ),
+                        ))
+            elif msg.content:
                 parts.append(gtypes.Part(text=msg.content))
 
             if msg.role == "assistant" and msg.tool_calls:

@@ -14,9 +14,7 @@ from src.capture.frame_compare import FrameComparer
 from src.capture.screenshot import capture_screen, get_focused_app
 from src.config import Settings
 from src.context.context_provider import ContextProvider
-from src.intelligence.intelligence_layer import IntelligenceLayer
 from src.ocr.apple_vision import perform_ocr
-from src.process.process_agent import ProcessAgent
 from src.storage.database import DatabaseManager
 from src.storage.models import Frame
 from src.storage.snapshot_writer import SnapshotWriter
@@ -24,9 +22,24 @@ from src.storage.snapshot_writer import SnapshotWriter
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from src.capture.browser_content import BrowserContentAgent
     from src.general_agent.agent import GeneralAgent
 
 logger = logging.getLogger(__name__)
+
+
+async def _save_snapshot(writer: SnapshotWriter, image: Image.Image) -> str:
+    return await asyncio.to_thread(writer.save, image)
+
+
+async def _run_ocr(image: Image.Image) -> tuple[str, float]:
+    """Run OCR and return (text, confidence). Returns ("", 0.0) on failure."""
+    try:
+        result = await asyncio.to_thread(perform_ocr, image)
+        return result.text, result.confidence
+    except Exception:
+        logger.error("OCR failed", exc_info=True)
+        return "", 0.0
 
 
 async def process_frame(
@@ -36,18 +49,64 @@ async def process_frame(
     trigger: str,
     db: DatabaseManager,
     writer: SnapshotWriter,
-    agents: list[ProcessAgent],
     providers: list[ContextProvider],
-    intelligence: IntelligenceLayer | None = None,
     general_agent: GeneralAgent | None = None,
+    browser_agent: BrowserContentAgent | None = None,
 ) -> int:
     """Process a captured frame through the full pipeline.
 
-    Used by both the local CaptureLoop and the external ingest endpoint.
+    Runs screenshot save, OCR, and browser content extraction concurrently,
+    then does sequential DB writes and pushes to GeneralAgent.
     Returns the frame_id.
     """
-    snapshot_path = await asyncio.to_thread(writer.save, image)
+    t_start = time.monotonic()
 
+    # Fire all three I/O-heavy operations concurrently
+    coros: list = [
+        _save_snapshot(writer, image),
+        _run_ocr(image),
+    ]
+    if browser_agent is not None:
+        coros.append(browser_agent.extract(app_name, window_name))
+
+    results = await asyncio.gather(*coros, return_exceptions=True)
+
+    snapshot_result = results[0]
+    ocr_result = results[1]
+    browser_result = results[2] if len(results) > 2 else None
+
+    t_parallel = time.monotonic()
+
+    # Unpack snapshot
+    if isinstance(snapshot_result, BaseException):
+        logger.error("Snapshot save failed: %s", snapshot_result, exc_info=snapshot_result)
+        snapshot_path = ""
+    else:
+        snapshot_path = snapshot_result
+
+    # Unpack OCR
+    if isinstance(ocr_result, BaseException):
+        logger.error("OCR failed: %s", ocr_result, exc_info=ocr_result)
+        ocr_text, ocr_confidence = "", 0.0
+    else:
+        ocr_text, ocr_confidence = ocr_result
+
+    # Unpack browser extraction
+    if isinstance(browser_result, BaseException):
+        logger.error("Browser extraction failed: %s", browser_result, exc_info=browser_result)
+        browser_event = None
+    else:
+        browser_event = browser_result
+
+    logger.debug(
+        "parallel phase done in %.0fms (snap=%s, ocr=%d chars/%.2f, browser=%s)",
+        (t_parallel - t_start) * 1000,
+        "ok" if snapshot_path else "FAIL",
+        len(ocr_text), ocr_confidence,
+        browser_event.agent_name if browser_event else "none",
+    )
+
+    # ── Sequential DB writes ──
     content_hash = hashlib.md5(
         image.resize((image.width // 8, image.height // 8), Image.Resampling.NEAREST).tobytes()
     ).hexdigest()
@@ -63,68 +122,73 @@ async def process_frame(
     )
     frame_id = await db.insert_frame(frame)
 
-    try:
-        ocr_result = await asyncio.to_thread(perform_ocr, image)
-        await db.insert_ocr(frame_id, ocr_result)
-        ocr_text = ocr_result.text
-    except Exception:
-        logger.error("OCR failed for frame %d", frame_id, exc_info=True)
-        ocr_text = ""
+    if ocr_text:
+        from src.storage.models import OCRResult
+        await db.insert_ocr(frame_id, OCRResult(text=ocr_text, text_json="[]", confidence=ocr_confidence))
 
-    agent_coros = [
-        agent.process(image, ocr_text, app_name, window_name)
-        for agent in agents
-    ]
-    provider_coros = [
-        provider.collect(app_name, window_name)
-        for provider in providers
-    ]
+    # ── Push to GeneralAgent ──
+    if browser_event is not None:
+        browser_event.frame_id = frame_id
+        await db.insert_event(frame_id, browser_event)
 
-    all_results = await asyncio.gather(
-        *agent_coros, *provider_coros, return_exceptions=True
+        logger.debug(
+            "frame %d | browser_content event: %s, text=%d chars",
+            frame_id, browser_event.summary[:80],
+            len(browser_event.metadata.get("text", "")),
+        )
+
+        if general_agent is not None:
+            await general_agent.push("event", {
+                "frame_id": frame_id,
+                "agent_name": browser_event.agent_name,
+                "app_type": browser_event.app_type,
+                "app_name": app_name or "",
+                "window_name": window_name or "",
+                "summary": browser_event.summary,
+                "metadata": browser_event.metadata,
+            })
+    elif general_agent is not None:
+        logger.debug(
+            "frame %d | no browser event, pushing screen_capture to GA",
+            frame_id,
+        )
+        await general_agent.push("event", {
+            "frame_id": frame_id,
+            "agent_name": "screen_capture",
+            "app_type": "other",
+            "app_name": app_name or "",
+            "window_name": window_name or "",
+            "summary": f"Screen: {app_name or 'Unknown'} — {window_name or ''}",
+            "metadata": {
+                "ocr_text": ocr_text,
+                "snapshot_path": snapshot_path,
+            },
+        })
+
+    # ── Context providers ──
+    if providers:
+        provider_results = await asyncio.gather(
+            *[p.collect(app_name, window_name) for p in providers],
+            return_exceptions=True,
+        )
+        for i, result in enumerate(provider_results):
+            if isinstance(result, BaseException):
+                logger.error(
+                    "ContextProvider %s failed: %s",
+                    providers[i].name, result, exc_info=result,
+                )
+                continue
+            if isinstance(result, list):
+                for ctx in result:
+                    ctx.frame_id = frame_id
+                    await db.insert_context(frame_id, ctx)
+
+    logger.debug(
+        "frame %d | pipeline total %.0fms (parallel=%.0f)",
+        frame_id,
+        (time.monotonic() - t_start) * 1000,
+        (t_parallel - t_start) * 1000,
     )
-
-    agent_results = all_results[: len(agents)]
-    provider_results = all_results[len(agents) :]
-
-    for i, result in enumerate(agent_results):
-        if isinstance(result, BaseException):
-            logger.error(
-                "ProcessAgent %s failed: %s",
-                agents[i].name,
-                result,
-                exc_info=result,
-            )
-            continue
-        if result is not None:
-            result.frame_id = frame_id
-            await db.insert_event(frame_id, result)
-            if intelligence and result.id is not None:
-                await intelligence.submit(result)
-            if general_agent is not None:
-                await general_agent.push("event", {
-                    "frame_id": frame_id,
-                    "agent_name": result.agent_name,
-                    "app_type": result.app_type,
-                    "app_name": app_name or "",
-                    "window_name": window_name or "",
-                    "summary": result.summary,
-                    "metadata": result.metadata,
-                })
-
-    for i, result in enumerate(provider_results):
-        if isinstance(result, BaseException):
-            logger.error(
-                "ContextProvider %s failed: %s",
-                providers[i].name,
-                result,
-                exc_info=result,
-            )
-            continue
-        if isinstance(result, list):
-            for ctx in result:
-                ctx.frame_id = frame_id
-                await db.insert_context(frame_id, ctx)
 
     return frame_id
 
@@ -137,20 +201,18 @@ class CaptureLoop:
         snapshot_writer: SnapshotWriter,
         trigger_queue: asyncio.Queue[CaptureTrigger],
         activity_feed: ActivityFeed,
-        process_agents: list[ProcessAgent],
         context_providers: list[ContextProvider],
-        intelligence_layer: IntelligenceLayer | None = None,
         general_agent: GeneralAgent | None = None,
+        browser_agent: BrowserContentAgent | None = None,
     ) -> None:
         self._settings = settings
         self._db = db
         self._writer = snapshot_writer
         self._queue = trigger_queue
         self._activity = activity_feed
-        self._agents = process_agents
         self._providers = context_providers
-        self._intelligence = intelligence_layer
         self._general_agent = general_agent
+        self._browser_agent = browser_agent
         self._comparer = FrameComparer()
         self._running = False
         self._last_capture_time = 0.0
@@ -165,7 +227,6 @@ class CaptureLoop:
 
         while self._running:
             try:
-                # If busy processing, drain the queue but don't start new captures
                 if self._processing_task is not None and not self._processing_task.done():
                     try:
                         self._queue.get_nowait()
@@ -218,11 +279,14 @@ class CaptureLoop:
         return None
 
     async def _do_capture(self, trigger: CaptureTrigger) -> None:
+        t_cap_start = time.monotonic()
+
         try:
             image = await asyncio.to_thread(capture_screen)
         except Exception:
             logger.error("Screenshot capture failed", exc_info=True)
             return
+        t_screen = time.monotonic()
 
         app_name, window_name = "", ""
         try:
@@ -239,10 +303,9 @@ class CaptureLoop:
                     trigger=trigger.value,
                     db=self._db,
                     writer=self._writer,
-                    agents=self._agents,
                     providers=self._providers,
-                    intelligence=self._intelligence,
                     general_agent=self._general_agent,
+                    browser_agent=self._browser_agent,
                 ),
                 timeout=self._settings.capture_timeout_s,
             )
@@ -256,12 +319,16 @@ class CaptureLoop:
         self._capture_count += 1
         self._last_capture_time = time.monotonic()
         self._activity.mark_captured()
+        total_ms = (time.monotonic() - t_cap_start) * 1000
+        screen_ms = (t_screen - t_cap_start) * 1000
         logger.debug(
-            "Capture #%d: frame=%d trigger=%s app=%s",
+            "Capture #%d: frame=%d trigger=%s app=%s | total=%.0fms (screen_grab=%.0fms)",
             self._capture_count,
             frame_id,
             trigger.value,
             app_name,
+            total_ms,
+            screen_ms,
         )
 
     async def stop(self) -> None:

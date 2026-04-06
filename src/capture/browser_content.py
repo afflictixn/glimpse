@@ -1,22 +1,28 @@
-"""ProcessAgent that extracts structured content from the active browser tab via AppleScript."""
+"""Extracts structured content from the active browser tab.
+
+Chromium browsers use JXA (JavaScript for Automation) because Chrome's traditional
+AppleScript bridge breaks on recent macOS — it reports 0 windows even when windows
+are open. JXA uses a different code path (Application().windows[0]) and works reliably.
+
+Safari keeps traditional AppleScript which still works.
+"""
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
+import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from PIL import Image
-
-from src.process.process_agent import ProcessAgent
 from src.storage.models import AppType, Event
 
 logger = logging.getLogger(__name__)
 
 MAX_TEXT_LENGTH = 8000
-OSASCRIPT_TIMEOUT_S = 3
+GENERIC_TEXT_LENGTH = 4000
+OSASCRIPT_TIMEOUT_S = 5
 
 CHROMIUM_BROWSERS = frozenset({
     "Google Chrome",
@@ -32,25 +38,12 @@ SAFARI_BROWSERS = frozenset({"Safari"})
 
 ALL_BROWSERS = CHROMIUM_BROWSERS | SAFARI_BROWSERS
 
-_EXTRACT_WITH_SELECTOR_JS = """(() => {{
-    const meta = {{}};
-    document.querySelectorAll('meta[property], meta[name]').forEach(m => {{
-        const key = m.getAttribute('property') || m.getAttribute('name');
-        if (key) meta[key] = m.content;
-    }});
-    const root = document.querySelector('{selector}');
-    return JSON.stringify({{
-        url: location.href,
-        title: document.title,
-        meta: meta,
-        text: root ? root.innerText.substring(0, {max_len}) : ''
-    }});
-}})()"""
+# ── Page-injected JS (runs inside the browser tab) ────────────────
 
-_EXTRACT_META_ONLY_JS = """(() => {
-    const meta = {};
-    document.querySelectorAll('meta[property], meta[name]').forEach(m => {
-        const key = m.getAttribute('property') || m.getAttribute('name');
+_EXTRACT_META_ONLY_PAGE_JS = r"""(function(){
+    var meta = {};
+    document.querySelectorAll('meta[property], meta[name]').forEach(function(m){
+        var key = m.getAttribute('property') || m.getAttribute('name');
         if (key) meta[key] = m.content;
     });
     return JSON.stringify({
@@ -60,34 +53,67 @@ _EXTRACT_META_ONLY_JS = """(() => {
     });
 })()"""
 
+_EXTRACT_WITH_SELECTOR_PAGE_JS = r"""(function(){{
+    var meta = {{}};
+    document.querySelectorAll('meta[property], meta[name]').forEach(function(m){{
+        var key = m.getAttribute('property') || m.getAttribute('name');
+        if (key) meta[key] = m.content;
+    }});
+    var root = document.querySelector('{selector}');
+    return JSON.stringify({{
+        url: location.href,
+        title: document.title,
+        meta: meta,
+        text: root ? root.innerText.substring(0, {max_len}) : ''
+    }});
+}})()"""
 
-def _chromium_js_script(app: str, js: str) -> str:
-    escaped = js.replace("\\", "\\\\").replace('"', '\\"')
+
+# ── JXA wrappers for Chromium (osascript -l JavaScript) ──────────
+
+def _chromium_jxa_execute(app: str, page_js: str) -> str:
+    """Build a JXA script that executes *page_js* inside the active tab."""
+    escaped = (
+        page_js
+        .replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+    )
     return (
-        f'tell application "{app}" to execute front window\'s '
-        f'active tab javascript "{escaped}"'
+        f'var app = Application("{app}");'
+        f'if (app.windows.length === 0) throw "NO_WINDOWS";'
+        f'app.windows[0].activeTab.execute({{javascript: "{escaped}"}});'
     )
 
 
-def _safari_js_script(js: str) -> str:
-    escaped = js.replace("\\", "\\\\").replace('"', '\\"')
+def _chromium_jxa_fallback(app: str) -> str:
+    """Build a JXA script that returns URL|||title without JS execution."""
+    return (
+        f'var app = Application("{app}");'
+        f'if (app.windows.length === 0) throw "NO_WINDOWS";'
+        f'var tab = app.windows[0].activeTab;'
+        f'tab.url() + "|||" + tab.title();'
+    )
+
+
+# ── AppleScript wrappers for Safari ──────────────────────────────
+
+def _safari_applescript_execute(page_js: str) -> str:
+    escaped = (
+        page_js
+        .replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+    )
     return (
         f'tell application "Safari" to do JavaScript '
         f'"{escaped}" in current tab of front window'
     )
 
 
-def _chromium_fallback_script(app: str) -> str:
-    return (
-        f'tell application "{app}"\n'
-        f"  set tabUrl to URL of active tab of front window\n"
-        f"  set tabTitle to title of active tab of front window\n"
-        f'  return tabUrl & "|||" & tabTitle\n'
-        f"end tell"
-    )
-
-
-def _safari_fallback_script() -> str:
+def _safari_applescript_fallback() -> str:
     return (
         'tell application "Safari"\n'
         "  set tabUrl to URL of current tab of front window\n"
@@ -97,8 +123,10 @@ def _safari_fallback_script() -> str:
     )
 
 
-class BrowserContentAgent(ProcessAgent):
+class BrowserContentAgent:
     """Extracts structured page content from the user's active browser tab."""
+
+    name = "browser_content"
 
     def __init__(self, allowlist_path: str | Path | None = None) -> None:
         if allowlist_path is None:
@@ -106,10 +134,6 @@ class BrowserContentAgent(ProcessAgent):
         self._allowlist_path = Path(allowlist_path)
         self._allowlist: list[dict[str, str]] = self._load_allowlist()
         self._last_url: str | None = None
-
-    @property
-    def name(self) -> str:
-        return "browser_content"
 
     def _load_allowlist(self) -> list[dict[str, str]]:
         if not self._allowlist_path.exists():
@@ -130,32 +154,31 @@ class BrowserContentAgent(ProcessAgent):
                 return entry
         return None
 
-    async def process(
+    async def extract(
         self,
-        image: Image.Image,
-        ocr_text: str,
         app_name: str | None,
-        window_name: str | None,
+        window_name: str | None = None,
     ) -> Event | None:
+        """Extract structured content from the active browser tab.
+
+        Returns None if the app is not a browser or extraction fails.
+        """
         if not app_name or app_name not in ALL_BROWSERS:
             return None
 
+        t_start = time.monotonic()
         is_chromium = app_name in CHROMIUM_BROWSERS
 
-        match = None
         if is_chromium:
-            js = _EXTRACT_META_ONLY_JS
+            script = _chromium_jxa_execute(app_name, _EXTRACT_META_ONLY_PAGE_JS)
+            raw = await self._run_osascript(script, jxa=True)
         else:
-            js = _EXTRACT_META_ONLY_JS
-
-        # First, try a quick URL-only check for dedup before heavy extraction.
-        # We use the meta-only JS which is lightweight and always gives us the URL.
-        raw = await self._run_applescript(
-            _chromium_js_script(app_name, js) if is_chromium else _safari_js_script(js),
-        )
+            script = _safari_applescript_execute(_EXTRACT_META_ONLY_PAGE_JS)
+            raw = await self._run_osascript(script, jxa=False)
+        t_meta = time.monotonic()
 
         if raw is None:
-            # JS execution failed -- try the non-JS fallback for URL + title
+            logger.debug("DOM meta extraction failed for %s, trying fallback", app_name)
             return await self._fallback_extraction(app_name, is_chromium)
 
         parsed = self._parse_js_result(raw)
@@ -164,28 +187,42 @@ class BrowserContentAgent(ProcessAgent):
 
         url = parsed.get("url", "")
 
-        # URL-based dedup
         if url and url == self._last_url:
+            logger.debug("DOM dedup: same URL, skipping (%s)", url[:80])
             return None
         self._last_url = url
 
-        # Check allowlist for text extraction
         match = self._match_allowlist(url)
-        if match:
-            selector = match.get("selector", "body")
-            full_js = _EXTRACT_WITH_SELECTOR_JS.format(
-                selector=selector.replace("'", "\\'"),
-                max_len=MAX_TEXT_LENGTH,
-            )
-            full_raw = await self._run_applescript(
-                _chromium_js_script(app_name, full_js)
-                if is_chromium
-                else _safari_js_script(full_js),
-            )
-            if full_raw is not None:
-                full_parsed = self._parse_js_result(full_raw)
-                if full_parsed is not None:
-                    parsed = full_parsed
+        selector = match.get("selector", "body") if match else "body"
+        max_len = MAX_TEXT_LENGTH if match else GENERIC_TEXT_LENGTH
+
+        page_js = _EXTRACT_WITH_SELECTOR_PAGE_JS.format(
+            selector=selector.replace("'", "\\'"),
+            max_len=max_len,
+        )
+        if is_chromium:
+            body_script = _chromium_jxa_execute(app_name, page_js)
+            full_raw = await self._run_osascript(body_script, jxa=True)
+        else:
+            body_script = _safari_applescript_execute(page_js)
+            full_raw = await self._run_osascript(body_script, jxa=False)
+        t_body = time.monotonic()
+
+        if full_raw is not None:
+            full_parsed = self._parse_js_result(full_raw)
+            if full_parsed is not None:
+                parsed = full_parsed
+
+        text_len = len(parsed.get("text", ""))
+        label = match.get("label", "") if match else ""
+        logger.debug(
+            "DOM extraction: meta=%.0fms body=%.0fms total=%.0fms | "
+            "url=%s selector=%s label=%s text=%d chars",
+            (t_meta - t_start) * 1000,
+            (t_body - t_meta) * 1000,
+            (t_body - t_start) * 1000,
+            url[:60], selector, label or "(generic)", text_len,
+        )
 
         return self._build_event(parsed, app_name, match)
 
@@ -194,11 +231,12 @@ class BrowserContentAgent(ProcessAgent):
     ) -> Event | None:
         """Fall back to simple URL + title extraction without JS execution."""
         if is_chromium:
-            script = _chromium_fallback_script(app_name)
+            script = _chromium_jxa_fallback(app_name)
+            raw = await self._run_osascript(script, jxa=True)
         else:
-            script = _safari_fallback_script()
+            script = _safari_applescript_fallback()
+            raw = await self._run_osascript(script, jxa=False)
 
-        raw = await self._run_applescript(script)
         if raw is None or "|||" not in raw:
             return None
 
@@ -235,14 +273,17 @@ class BrowserContentAgent(ProcessAgent):
             "browser": app_name,
         }
 
+        text = parsed.get("text", "")
         if match:
             label = match.get("label", "")
-            text = parsed.get("text", "")
             if text:
                 metadata["text"] = text[:MAX_TEXT_LENGTH]
             metadata["allowlist_label"] = label
             summary = f"Viewing [{label}]: {title} ({domain})"
         else:
+            if text:
+                metadata["text"] = text[:GENERIC_TEXT_LENGTH]
+            metadata["allowlist_label"] = ""
             summary = f"Viewing: {title} ({domain})"
 
         return Event(
@@ -252,10 +293,14 @@ class BrowserContentAgent(ProcessAgent):
             metadata=metadata,
         )
 
-    async def _run_applescript(self, script: str) -> str | None:
+    async def _run_osascript(self, script: str, *, jxa: bool = False) -> str | None:
+        cmd = ["osascript"]
+        if jxa:
+            cmd += ["-l", "JavaScript"]
+        cmd += ["-e", script]
         try:
             proc = await asyncio.create_subprocess_exec(
-                "osascript", "-e", script,
+                *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -264,21 +309,21 @@ class BrowserContentAgent(ProcessAgent):
             )
             if proc.returncode != 0:
                 logger.debug(
-                    "osascript failed (rc=%d): %s",
-                    proc.returncode,
+                    "osascript failed (rc=%d, jxa=%s): %s",
+                    proc.returncode, jxa,
                     stderr.decode(errors="replace")[:200],
                 )
                 return None
             return stdout.decode(errors="replace").strip()
         except asyncio.TimeoutError:
-            logger.debug("osascript timed out after %ds", OSASCRIPT_TIMEOUT_S)
+            logger.debug("osascript timed out after %ds (jxa=%s)", OSASCRIPT_TIMEOUT_S, jxa)
             try:
                 proc.kill()
             except Exception:
                 pass
             return None
         except Exception:
-            logger.debug("osascript execution error", exc_info=True)
+            logger.debug("osascript execution error (jxa=%s)", jxa, exc_info=True)
             return None
 
     @staticmethod
